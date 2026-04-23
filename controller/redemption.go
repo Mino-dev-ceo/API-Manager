@@ -39,6 +39,19 @@ func SearchRedemptions(c *gin.Context) {
 	return
 }
 
+func GetUserRedemptions(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	redemptions, total, err := model.GetUserRedemptions(c.GetInt("id"), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(redemptions)
+	common.ApiSuccess(c, pageInfo)
+	return
+}
+
 func GetRedemption(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -112,6 +125,38 @@ func AddRedemption(c *gin.Context) {
 	return
 }
 
+func AddUserRedemption(c *gin.Context) {
+	redemption := model.Redemption{}
+	err := c.ShouldBindJSON(&redemption)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if utf8.RuneCountInString(redemption.Name) == 0 || utf8.RuneCountInString(redemption.Name) > 20 {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionNameLength)
+		return
+	}
+	if redemption.Count <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionCountPositive)
+		return
+	}
+	if redemption.Count > 100 {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionCountMax)
+		return
+	}
+	if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+		return
+	}
+	keys, err := model.CreateUserRedemptions(c.GetInt("id"), redemption.Name, redemption.Quota, redemption.Count, redemption.ExpiredTime)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"keys": keys})
+	return
+}
+
 func DeleteRedemption(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	err := model.DeleteRedemptionById(id)
@@ -123,6 +168,21 @@ func DeleteRedemption(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
+	return
+}
+
+func RevokeUserRedemption(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	redemption, err := model.RevokeUserRedemptionById(id, c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, redemption)
 	return
 }
 

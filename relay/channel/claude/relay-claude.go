@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +31,8 @@ const (
 	WebSearchMaxUsesMedium = 5
 	WebSearchMaxUsesHigh   = 10
 )
+
+const defaultClaudeCompatibilitySystemPrompt = "你是一个以 Claude 兼容风格响应的 AI 助手。请遵循 Claude Messages API 的响应习惯，保持自然、准确、克制和有帮助。不要主动披露平台内部路由、渠道、代理、部署、供应商或运维实现细节；当用户询问服务身份或模型来源时，应准确说明具体能力取决于本次请求选择的模型与服务配置，不得声称由任何第三方官方直接托管，除非上游配置和公开服务信息明确如此。"
 
 func stopReasonClaude2OpenAI(reason string) string {
 	return reasonmap.ClaudeStopReasonToOpenAIFinishReason(reason)
@@ -287,7 +290,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	claudeMessages := make([]dto.ClaudeMessage, 0)
 	isFirstMessage := true
 	// 初始化system消息数组，用于累积多个system消息
-	var systemMessages []dto.ClaudeMediaMessage
+	systemMessages := defaultClaudeCompatibilitySystemMessages()
 
 	for _, message := range formatMessages {
 		if message.Role == "system" {
@@ -376,6 +379,12 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 								Text: common.GetPointer[string](mediaMessage.Text),
 							})
 						}
+					case dto.ContentTypeFile:
+						fileMessages, err := openAIFileContentToClaude(c, mediaMessage)
+						if err != nil {
+							return nil, err
+						}
+						claudeMediaMessages = append(claudeMediaMessages, fileMessages...)
 					default:
 						source := mediaMessage.ToFileSource()
 						if source == nil {
@@ -432,6 +441,92 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
 	return &claudeRequest, nil
+}
+
+func defaultClaudeCompatibilitySystemMessages() []dto.ClaudeMediaMessage {
+	return []dto.ClaudeMediaMessage{
+		{
+			Type: "text",
+			Text: common.GetPointer[string](defaultClaudeCompatibilitySystemPrompt),
+		},
+	}
+}
+
+func openAIFileContentToClaude(c *gin.Context, mediaMessage dto.MediaContent) ([]dto.ClaudeMediaMessage, error) {
+	file := mediaMessage.GetFile()
+	if file == nil || file.FileData == "" {
+		return nil, nil
+	}
+
+	mimeType := inferOpenAIFileMimeType(file)
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		return nil, nil
+	}
+
+	source := types.NewFileSourceFromData(file.FileData, mimeType)
+	base64Data, detectedMimeType, err := service.GetBase64Data(c, source, "formatting file for Claude")
+	if err != nil {
+		return nil, fmt.Errorf("get file data failed: %s", err.Error())
+	}
+	if detectedMimeType != "" {
+		mimeType = detectedMimeType
+	}
+
+	if strings.HasPrefix(mimeType, "text/") {
+		decoded, err := base64.StdEncoding.DecodeString(base64Data)
+		if err != nil {
+			return nil, fmt.Errorf("decode text file failed: %s", err.Error())
+		}
+		text := string(decoded)
+		if text == "" {
+			return nil, nil
+		}
+		return []dto.ClaudeMediaMessage{{
+			Type: "text",
+			Text: common.GetPointer[string](text),
+		}}, nil
+	}
+
+	if mimeType == "application/pdf" {
+		return []dto.ClaudeMediaMessage{{
+			Type: "document",
+			Source: &dto.ClaudeMessageSource{
+				Type:      "base64",
+				MediaType: mimeType,
+				Data:      base64Data,
+			},
+		}}, nil
+	}
+
+	if strings.HasPrefix(mimeType, "image/") {
+		return []dto.ClaudeMediaMessage{{
+			Type: "image",
+			Source: &dto.ClaudeMessageSource{
+				Type:      "base64",
+				MediaType: mimeType,
+				Data:      base64Data,
+			},
+		}}, nil
+	}
+
+	return nil, nil
+}
+
+func inferOpenAIFileMimeType(file *dto.MessageFile) string {
+	if file == nil {
+		return ""
+	}
+	if idx := strings.Index(file.FileData, ";"); strings.HasPrefix(file.FileData, "data:") && idx > len("data:") {
+		mimeType := strings.TrimPrefix(file.FileData[:idx], "data:")
+		if mimeType != "" {
+			return mimeType
+		}
+	}
+	fileName := strings.ToLower(file.FileName)
+	if dot := strings.LastIndex(fileName, "."); dot != -1 && dot+1 < len(fileName) {
+		return service.GetMimeTypeByExtension(fileName[dot+1:])
+	}
+	return ""
 }
 
 func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
@@ -606,6 +701,7 @@ func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
 	if usage == nil {
 		return dto.Usage{}
 	}
+	service.NormalizeUsage(usage)
 	clone := *usage
 	clone.ClaudeCacheCreation5mTokens, clone.ClaudeCacheCreation1hTokens = service.NormalizeCacheCreationSplit(
 		usage.PromptTokensDetails.CachedCreationTokens,
@@ -849,6 +945,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	}
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
+		service.NormalizeUsage(claudeInfo.Usage)
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude {
@@ -912,6 +1009,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
 	}
+	service.NormalizeUsage(claudeInfo.Usage)
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:

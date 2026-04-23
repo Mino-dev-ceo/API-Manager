@@ -173,6 +173,92 @@ func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
 	return fmt.Sprintf("status_code=%d, %s", e.StatusCode, msg)
 }
 
+func defaultClientErrorMessage(statusCode int, code ErrorCode) string {
+	switch {
+	case statusCode == http.StatusBadRequest:
+		return "Invalid request. Please check the request body and parameters."
+	case statusCode == http.StatusUnauthorized:
+		return "Invalid authentication credentials."
+	case statusCode == http.StatusForbidden:
+		return "Access denied for this request."
+	case statusCode == http.StatusNotFound || code == ErrorCodeModelNotFound:
+		return "The requested model or endpoint was not found."
+	case statusCode == http.StatusTooManyRequests:
+		return "Rate limit exceeded. Please retry later."
+	case statusCode >= http.StatusInternalServerError:
+		return "The model service is temporarily unavailable. Please retry later."
+	default:
+		return "Request failed. Please retry later."
+	}
+}
+
+func containsInternalImplementationTerm(message string) bool {
+	lowerMessage := strings.ToLower(message)
+	internalTerms := []string{
+		"kiro",
+		"aws",
+		"amazon",
+		"bedrock",
+		"relay",
+		"upstream",
+		"channel",
+		"reverse proxy",
+		"proxy",
+		"new-api",
+		"new api",
+		"token.minotoken.xyz",
+		"反代",
+		"中转",
+		"渠道",
+		"上游",
+		"代理",
+		"内部路由",
+	}
+	for _, term := range internalTerms {
+		if strings.Contains(lowerMessage, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeClientErrorMessage(message string, statusCode int, code ErrorCode) string {
+	message = strings.TrimSpace(common.MaskSensitiveInfo(message))
+	if message == "" || containsInternalImplementationTerm(message) {
+		return defaultClientErrorMessage(statusCode, code)
+	}
+	return message
+}
+
+func normalizeOpenAIErrorType(errorType string, statusCode int) string {
+	switch errorType {
+	case "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "api_error":
+		return errorType
+	}
+	switch {
+	case statusCode == http.StatusBadRequest:
+		return "invalid_request_error"
+	case statusCode == http.StatusUnauthorized:
+		return "authentication_error"
+	case statusCode == http.StatusForbidden:
+		return "permission_error"
+	case statusCode == http.StatusNotFound:
+		return "not_found_error"
+	case statusCode == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		return "api_error"
+	}
+}
+
+func normalizeClaudeErrorType(errorType string, statusCode int) string {
+	switch errorType {
+	case "invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "api_error":
+		return errorType
+	}
+	return normalizeOpenAIErrorType(errorType, statusCode)
+}
+
 func (e *NewAPIError) SetMessage(message string) {
 	e.Err = errors.New(message)
 }
@@ -201,12 +287,8 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Code:    e.errorCode,
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
-	if result.Message == "" {
-		result.Message = string(e.errorType)
-	}
+	result.Message = sanitizeClientErrorMessage(result.Message, e.StatusCode, e.errorCode)
+	result.Type = normalizeOpenAIErrorType(result.Type, e.StatusCode)
 	return result
 }
 
@@ -230,12 +312,8 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			Type:    string(e.errorType),
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
-	if result.Message == "" {
-		result.Message = string(e.errorType)
-	}
+	result.Message = sanitizeClientErrorMessage(result.Message, e.StatusCode, e.errorCode)
+	result.Type = normalizeClaudeErrorType(result.Type, e.StatusCode)
 	return result
 }
 

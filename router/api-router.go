@@ -85,9 +85,13 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/passkey/verify/finish", controller.PasskeyVerifyFinish)
 				selfRoute.DELETE("/passkey", controller.PasskeyDelete)
 				selfRoute.GET("/aff", controller.GetAffCode)
+				selfRoute.GET("/affiliate", controller.GetAffiliateOverview)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
+				selfRoute.GET("/redemptions", controller.GetUserRedemptions)
+				selfRoute.POST("/redemptions", middleware.CriticalRateLimit(), controller.AddUserRedemption)
+				selfRoute.POST("/redemptions/:id/revoke", middleware.CriticalRateLimit(), controller.RevokeUserRedemption)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
 				selfRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.RequestStripePay)
@@ -208,6 +212,11 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
+		}
+		operationRoute := apiRouter.Group("/operation")
+		operationRoute.Use(middleware.AdminAuth())
+		{
+			operationRoute.GET("/dashboard", controller.GetOperationDashboard)
 		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())

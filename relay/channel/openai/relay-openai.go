@@ -257,7 +257,12 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		usageModified = true
 	}
 
+	usageBeforePostProcessing, _ := common.Marshal(simpleResponse.Usage)
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	usageAfterPostProcessing, _ := common.Marshal(simpleResponse.Usage)
+	if string(usageBeforePostProcessing) != string(usageAfterPostProcessing) {
+		usageModified = true
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -633,6 +638,8 @@ func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, res
 			}
 		}
 	}
+
+	service.NormalizeUsage(usage)
 }
 
 func extractCachedTokensFromBody(body []byte) (int, bool) {

@@ -275,6 +275,33 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 	require.Equal(t, 0, openAIUsage.ClaudeCacheCreation1hTokens)
 }
 
+func TestRequestOpenAI2ClaudeMessage_PrependsCompatibilitySystemPrompt(t *testing.T) {
+	request := dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []dto.Message{
+			{
+				Role:    "system",
+				Content: "用户自定义系统提示",
+			},
+			{
+				Role:    "user",
+				Content: "hello",
+			},
+		},
+	}
+
+	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
+	require.NoError(t, err)
+
+	systemMessages := claudeRequest.ParseSystem()
+	require.Len(t, systemMessages, 2)
+	require.Equal(t, "text", systemMessages[0].Type)
+	require.Contains(t, systemMessages[0].GetText(), "Claude 兼容风格")
+	require.Contains(t, systemMessages[0].GetText(), "不得声称由任何第三方官方直接托管")
+	require.Equal(t, "text", systemMessages[1].Type)
+	require.Equal(t, "用户自定义系统提示", systemMessages[1].GetText())
+}
+
 func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model: "claude-3-5-sonnet",

@@ -67,6 +67,38 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, 1488, chatSummary.Quota)
 }
 
+func TestNormalizeUsageClampsInvalidCountsAndBackfillsTotals(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     -12,
+		CompletionTokens: 5,
+		TotalTokens:      1,
+		InputTokens:      7,
+		OutputTokens:     -3,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         -4,
+			CachedCreationTokens: 2,
+		},
+	}
+
+	NormalizeUsage(usage)
+
+	require.Equal(t, 7, usage.PromptTokens)
+	require.Equal(t, 5, usage.CompletionTokens)
+	require.Equal(t, 12, usage.TotalTokens)
+	require.Equal(t, 7, usage.InputTokens)
+	require.Equal(t, 5, usage.OutputTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 2, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestValidUsageAcceptsTotalOnlyUsage(t *testing.T) {
+	usage := &dto.Usage{TotalTokens: 42}
+
+	require.True(t, ValidUsage(usage))
+	require.Equal(t, 42, usage.PromptTokens)
+	require.Equal(t, 42, usage.TotalTokens)
+}
+
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

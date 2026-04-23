@@ -40,8 +40,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 
 	// 确保响应体总是被关闭
 	defer func() {
@@ -73,12 +74,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 
 	if common.DebugEnabled {
-		// print timeout and ping interval for debugging
-		println("relay timeout seconds:", common.RelayTimeout)
-		println("relay max idle conns:", common.RelayMaxIdleConns)
-		println("relay max idle conns per host:", common.RelayMaxIdleConnsPerHost)
-		println("streaming timeout seconds:", int64(streamingTimeout.Seconds()))
-		println("ping interval seconds:", int64(pingInterval.Seconds()))
+		logger.LogInfo(c, fmt.Sprintf("stream config: timeout=%ds, max_idle=%d, max_idle_per_host=%d, stream_timeout=%ds, ping_interval=%ds",
+			common.RelayTimeout,
+			common.RelayMaxIdleConns,
+			common.RelayMaxIdleConnsPerHost,
+			int64(streamingTimeout.Seconds()),
+			int64(pingInterval.Seconds()),
+		))
 	}
 
 	// 改进资源清理，确保所有 goroutine 正确退出
@@ -128,7 +130,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					common.SafeSendBool(stopChan, true)
 				}
 				if common.DebugEnabled {
-					println("ping goroutine exited")
+					logger.LogInfo(c, "stream ping worker exited")
 				}
 			}()
 
@@ -156,7 +158,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 							return
 						}
 						if common.DebugEnabled {
-							println("ping data sent")
+							logger.LogInfo(c, "stream ping data sent")
 						}
 					case <-time.After(10 * time.Second):
 						logger.LogError(c, "ping data send timeout")
@@ -218,7 +220,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 			common.SafeSendBool(stopChan, true)
 			if common.DebugEnabled {
-				println("scanner goroutine exited")
+				logger.LogInfo(c, "stream scanner worker exited")
 			}
 		}()
 
@@ -238,7 +240,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			ticker.Reset(streamingTimeout)
 			data := scanner.Text()
 			if common.DebugEnabled {
-				println(data)
+				logger.LogInfo(c, "stream data received")
 			}
 
 			if len(data) < 6 {
@@ -266,7 +268,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			} else {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				if common.DebugEnabled {
-					println("received [DONE], stopping scanner")
+					logger.LogInfo(c, "stream done received")
 				}
 				return
 			}

@@ -3,12 +3,14 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Redemption struct {
@@ -57,6 +59,36 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 		return nil, 0, err
 	}
 
+	return redemptions, total, nil
+}
+
+func GetUserRedemptions(userId int, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return nil, 0, tx.Error
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	query := tx.Model(&Redemption{}).Where("user_id = ?", userId)
+	err = query.Count(&total).Error
+	if err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
+
+	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
+	if err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
+
+	if err = tx.Commit().Error; err != nil {
+		return nil, 0, err
+	}
 	return redemptions, total, nil
 }
 
@@ -110,6 +142,66 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	var err error = nil
 	err = DB.First(&redemption, "id = ?", id).Error
 	return &redemption, err
+}
+
+func CreateUserRedemptions(userId int, name string, quota int, count int, expiredTime int64) (keys []string, err error) {
+	if userId == 0 {
+		return nil, errors.New("无效的 user id")
+	}
+	if quota <= 0 {
+		return nil, errors.New("兑换额度必须大于 0")
+	}
+	if count <= 0 {
+		return nil, errors.New("兑换码个数必须大于 0")
+	}
+	if count > 100 {
+		return nil, errors.New("一次兑换码批量生成的个数不能大于 100")
+	}
+	if quota > math.MaxInt/count {
+		return nil, errors.New("兑换额度过大")
+	}
+
+	totalQuota := quota * count
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "quota").First(&user, "id = ?", userId).Error; err != nil {
+			return err
+		}
+		if user.Quota < totalQuota {
+			return errors.New("可用余额不足，无法生成兑换码")
+		}
+		if err := tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota - ?", totalQuota)).Error; err != nil {
+			return err
+		}
+
+		keys = make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			key := common.GetUUID()
+			record := Redemption{
+				UserId:      userId,
+				Name:        name,
+				Key:         key,
+				Status:      common.RedemptionCodeStatusEnabled,
+				CreatedTime: common.GetTimestamp(),
+				Quota:       quota,
+				ExpiredTime: expiredTime,
+			}
+			if err := tx.Create(&record).Error; err != nil {
+				return err
+			}
+			keys = append(keys, key)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := cacheDecrUserQuota(userId, int64(totalQuota)); err != nil {
+		common.SysLog("failed to decrease user quota cache after creating redemptions: " + err.Error())
+	}
+
+	RecordLog(userId, LogTypeManage, fmt.Sprintf("生成兑换码 %d 个，总额度 %s", count, logger.LogQuota(totalQuota)))
+	return keys, nil
 }
 
 func Redeem(key string, userId int) (quota int, err error) {
@@ -189,6 +281,46 @@ func DeleteRedemptionById(id int) (err error) {
 		return err
 	}
 	return redemption.Delete()
+}
+
+func RevokeUserRedemptionById(id int, userId int) (*Redemption, error) {
+	if id == 0 {
+		return nil, errors.New("id 为空！")
+	}
+	if userId == 0 {
+		return nil, errors.New("无效的 user id")
+	}
+
+	redemption := &Redemption{}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(redemption, "id = ? AND user_id = ?", id, userId).Error; err != nil {
+			return err
+		}
+		if redemption.Status == common.RedemptionCodeStatusUsed || redemption.UsedUserId != 0 {
+			return errors.New("该兑换码已被使用，无法撤销")
+		}
+		if redemption.Status == common.RedemptionCodeStatusDisabled {
+			return errors.New("该兑换码已撤销")
+		}
+
+		redemption.Status = common.RedemptionCodeStatusDisabled
+		if err := tx.Model(redemption).Select("status").Updates(redemption).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := cacheIncrUserQuota(userId, int64(redemption.Quota)); err != nil {
+		common.SysLog("failed to increase user quota cache after revoking redemption: " + err.Error())
+	}
+
+	RecordLog(userId, LogTypeManage, fmt.Sprintf("撤销兑换码 %d，返还额度 %s", redemption.Id, logger.LogQuota(redemption.Quota)))
+	return redemption, nil
 }
 
 func DeleteInvalidRedemptions() (int64, error) {
