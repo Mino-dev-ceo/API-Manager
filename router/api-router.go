@@ -179,9 +179,9 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/subscription/epay/return", controller.SubscriptionEpayReturn)
 
 		blindBoxRoute := apiRouter.Group("/blind-box")
-		blindBoxRoute.Use(middleware.UserAuth())
 		{
 			blindBoxRoute.GET("/packages", controller.ListBlindBoxPackages)
+			blindBoxRoute.Use(middleware.UserAuth())
 			blindBoxRoute.POST("/open", controller.OpenBlindBox)
 		}
 
