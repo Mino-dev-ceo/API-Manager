@@ -72,6 +72,17 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
+		// OpenAI Files compatibility. Keep these outside Distribute() because
+		// file upload/list/delete requests do not contain a model and should not
+		// consume or select an upstream channel. Chat requests that reference one
+		// of these file IDs are expanded to data URLs inside controller.Relay.
+		relayV1Router.GET("/files", controller.ListOpenAIFiles)
+		relayV1Router.POST("/files", controller.UploadOpenAIFile)
+		relayV1Router.GET("/files/:id", controller.GetOpenAIFile)
+		relayV1Router.GET("/files/:id/content", controller.GetOpenAIFileContent)
+		relayV1Router.DELETE("/files/:id", controller.DeleteOpenAIFile)
+	}
+	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
 		wsRouter.Use(middleware.Distribute())
@@ -152,11 +163,6 @@ func SetRelayRouter(router *gin.Engine) {
 
 		// not implemented
 		httpRouter.POST("/images/variations", controller.RelayNotImplemented)
-		httpRouter.GET("/files", controller.RelayNotImplemented)
-		httpRouter.POST("/files", controller.RelayNotImplemented)
-		httpRouter.DELETE("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id/content", controller.RelayNotImplemented)
 		httpRouter.POST("/fine-tunes", controller.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes", controller.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes/:id", controller.RelayNotImplemented)
