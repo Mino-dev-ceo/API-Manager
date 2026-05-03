@@ -31,7 +31,7 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.TryUserAuth(), controller.GetPricing)
-		apiRouter.GET("/verification", middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
+		apiRouter.GET("/verification", middleware.AuthRateLimit(), middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), controller.ResetPassword)
 		// OAuth routes - specific routes must come before :provider wildcard
@@ -56,8 +56,8 @@ func SetApiRouter(router *gin.Engine) {
 
 		userRoute := apiRouter.Group("/user")
 		{
-			userRoute.POST("/register", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Register)
-			userRoute.POST("/login", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Login)
+			userRoute.POST("/register", middleware.AuthRateLimit(), middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Register)
+			userRoute.POST("/login", middleware.AuthRateLimit(), middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.Login)
 			userRoute.POST("/login/2fa", middleware.CriticalRateLimit(), controller.Verify2FALogin)
 			userRoute.POST("/passkey/login/begin", middleware.CriticalRateLimit(), controller.PasskeyLoginBegin)
 			userRoute.POST("/passkey/login/finish", middleware.CriticalRateLimit(), controller.PasskeyLoginFinish)
@@ -92,6 +92,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/redemptions", controller.GetUserRedemptions)
 				selfRoute.POST("/redemptions", middleware.CriticalRateLimit(), controller.AddUserRedemption)
 				selfRoute.POST("/redemptions/:id/revoke", middleware.CriticalRateLimit(), controller.RevokeUserRedemption)
+				selfRoute.GET("/blind-box/packages", controller.ListBlindBoxPackages)
+				selfRoute.POST("/blind-box/open", controller.OpenBlindBox)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
 				selfRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.RequestStripePay)
@@ -175,6 +177,22 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", controller.SubscriptionEpayReturn)
+
+		blindBoxRoute := apiRouter.Group("/blind-box")
+		blindBoxRoute.Use(middleware.UserAuth())
+		{
+			blindBoxRoute.GET("/packages", controller.ListBlindBoxPackages)
+			blindBoxRoute.POST("/open", controller.OpenBlindBox)
+		}
+
+		blindBoxAdminRoute := apiRouter.Group("/blind-box/admin")
+		blindBoxAdminRoute.Use(middleware.AdminAuth())
+		{
+			blindBoxAdminRoute.GET("/settings", controller.GetBlindBoxSettings)
+			blindBoxAdminRoute.PUT("/settings", controller.SaveBlindBoxSettings)
+			blindBoxAdminRoute.POST("/settings", controller.SaveBlindBoxSettings)
+		}
+
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

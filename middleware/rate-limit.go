@@ -94,9 +94,25 @@ func GlobalWebRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+func AuthRateLimit() func(c *gin.Context) {
+	if common.AuthRateLimitEnable {
+		return rateLimitFactory(common.AuthRateLimitNum, common.AuthRateLimitDuration, "AU")
+	}
+	return defNext
+}
+
 func GlobalAPIRateLimit() func(c *gin.Context) {
 	if common.GlobalApiRateLimitEnable {
-		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		limiter := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		return func(c *gin.Context) {
+			switch c.Request.URL.Path {
+			case "/api/blind-box/packages", "/api/blind-box/open", "/api/user/blind-box/packages", "/api/user/blind-box/open":
+				c.Next()
+				return
+			default:
+				limiter(c)
+			}
+		}
 	}
 	return defNext
 }
