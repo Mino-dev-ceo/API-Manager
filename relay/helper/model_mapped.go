@@ -40,7 +40,8 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 			currentModel: true,
 		}
 		for {
-			if mappedModel, exists := modelMap[currentModel]; exists && mappedModel != "" {
+			mappedModel, exists := lookupMappedModel(modelMap, currentModel)
+			if exists && mappedModel != "" {
 				// 模型重定向循环检测，避免无限循环
 				if visitedModels[mappedModel] {
 					if mappedModel == currentModel {
@@ -78,4 +79,19 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		request.SetModelName(info.UpstreamModelName)
 	}
 	return nil
+}
+
+func lookupMappedModel(modelMap map[string]string, currentModel string) (string, bool) {
+	if mappedModel, exists := modelMap[currentModel]; exists {
+		return mappedModel, true
+	}
+	for _, alias := range ratio_setting.EquivalentMatchingModelNames(currentModel) {
+		if alias == currentModel {
+			continue
+		}
+		if mappedModel, exists := modelMap[alias]; exists {
+			return mappedModel, true
+		}
+	}
+	return "", false
 }
