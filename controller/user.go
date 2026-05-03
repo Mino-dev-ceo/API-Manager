@@ -102,6 +102,11 @@ func setupLogin(user *model.User, c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
 		return
 	}
+	accessToken, err := ensureUserAccessToken(user)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
@@ -112,8 +117,33 @@ func setupLogin(user *model.User, c *gin.Context) {
 			"role":         user.Role,
 			"status":       user.Status,
 			"group":        user.Group,
+			"email":        user.Email,
+			"access_token": accessToken,
 		},
 	})
+}
+
+func ensureUserAccessToken(user *model.User) (string, error) {
+	if token := strings.TrimSpace(user.GetAccessToken()); token != "" {
+		return token, nil
+	}
+	for attempts := 0; attempts < 5; attempts++ {
+		randI := common.GetRandomInt(4)
+		key, err := common.GenerateRandomKey(29 + randI)
+		if err != nil {
+			return "", err
+		}
+		var existing model.User
+		if model.DB.Where("access_token = ?", key).First(&existing).RowsAffected != 0 {
+			continue
+		}
+		user.SetAccessToken(key)
+		if err := user.Update(false); err != nil {
+			return "", err
+		}
+		return key, nil
+	}
+	return "", errors.New("failed to generate unique access token")
 }
 
 func Logout(c *gin.Context) {
@@ -152,7 +182,8 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
-	if common.EmailVerificationEnabled {
+	requireEmailVerification := common.EmailVerificationEnabled && common.EmailDeliveryConfigured()
+	if requireEmailVerification {
 		if user.Email == "" || user.VerificationCode == "" {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailVerificationRequired)
 			return
@@ -181,7 +212,7 @@ func Register(c *gin.Context) {
 		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
-	if common.EmailVerificationEnabled {
+	if requireEmailVerification {
 		cleanUser.Email = user.Email
 	}
 	if err := cleanUser.Insert(inviterId); err != nil {
@@ -224,11 +255,7 @@ func Register(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
-	return
+	setupLogin(&insertedUser, c)
 }
 
 func GetAllUsers(c *gin.Context) {
