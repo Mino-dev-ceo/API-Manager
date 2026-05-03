@@ -584,9 +584,11 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 					},
 				})
 			case "signature_delta":
-				// 加密的不处理
-				signatureContent := "\n"
-				choice.Delta.ReasoningContent = &signatureContent
+				signatureContent := claudeResponse.Delta.Signature
+				if signatureContent == "" {
+					signatureContent = "\n"
+				}
+				choice.Delta.Signature = &signatureContent
 			case "thinking_delta":
 				choice.Delta.ReasoningContent = claudeResponse.Delta.Thinking
 			}

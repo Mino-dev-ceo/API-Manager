@@ -176,6 +176,25 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 	}
 }
 
+func TestStreamResponseClaude2OpenAIPreservesSignatureDelta(t *testing.T) {
+	signature := "opaque-signature"
+	claudeResponse := &dto.ClaudeResponse{
+		Type: "content_block_delta",
+		Delta: &dto.ClaudeMediaMessage{
+			Type:      "signature_delta",
+			Signature: signature,
+		},
+	}
+
+	response := StreamResponseClaude2OpenAI(claudeResponse)
+
+	require.NotNil(t, response)
+	require.Len(t, response.Choices, 1)
+	require.NotNil(t, response.Choices[0].Delta.Signature)
+	require.Equal(t, signature, *response.Choices[0].Delta.Signature)
+	require.Nil(t, response.Choices[0].Delta.ReasoningContent)
+}
+
 func TestBuildOpenAIStyleUsageFromClaudeUsage(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     100,
