@@ -114,3 +114,31 @@ func TestClaudeMessagesWindsurfBaseURLUsesAnthropicPassthrough(t *testing.T) {
 		t.Fatalf("GetRequestURL() = %q, want %q", gotURL, want)
 	}
 }
+
+func TestClaudeOpusMessagesUseAnthropicPassthroughForOpenAIChannel(t *testing.T) {
+	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	defer func() {
+		model_setting.GetGlobalSettings().PassThroughRequestEnabled = original
+	}()
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		OriginModelName: "claude-opus-4-6",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "http://service.internal:3003",
+			UpstreamModelName: "claude-opus-4.6",
+		},
+	}
+	adaptor := &Adaptor{}
+
+	gotURL, err := adaptor.GetRequestURL(info)
+	if err != nil {
+		t.Fatalf("GetRequestURL returned error: %v", err)
+	}
+	if want := "http://service.internal:3003/v1/messages"; gotURL != want {
+		t.Fatalf("GetRequestURL() = %q, want %q", gotURL, want)
+	}
+}

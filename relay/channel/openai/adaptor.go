@@ -42,8 +42,12 @@ type Adaptor struct {
 
 func shouldPassThroughClaudeMessages(info *relaycommon.RelayInfo) bool {
 	baseURL := ""
+	originModel := ""
+	upstreamModel := ""
 	if info != nil {
 		baseURL = strings.ToLower(info.ChannelBaseUrl)
+		originModel = strings.ToLower(info.OriginModelName)
+		upstreamModel = strings.ToLower(info.UpstreamModelName)
 	}
 	return info != nil &&
 		info.RelayFormat == types.RelayFormatClaude &&
@@ -51,7 +55,9 @@ func shouldPassThroughClaudeMessages(info *relaycommon.RelayInfo) bool {
 		info.RelayMode != relayconstant.RelayModeResponsesCompact &&
 		(model_setting.GetGlobalSettings().PassThroughRequestEnabled ||
 			info.ChannelSetting.PassThroughBodyEnabled ||
-			strings.Contains(baseURL, "windsurf"))
+			strings.Contains(baseURL, "windsurf") ||
+			strings.HasPrefix(originModel, "claude-opus-4-") ||
+			strings.HasPrefix(upstreamModel, "claude-opus-4-"))
 }
 
 // parseReasoningEffortFromModelSuffix 从模型名称中解析推理级别
