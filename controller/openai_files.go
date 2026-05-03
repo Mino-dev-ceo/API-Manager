@@ -226,6 +226,18 @@ func resolveUploadedFileRefsValue(v any) (any, bool) {
 		if fileID, ok := x["file_id"].(string); ok && strings.HasPrefix(fileID, openAIFilePrefix) {
 			if dataURL, exists := resolveOpenAIFileDataURL(fileID); exists {
 				x["file_data"] = dataURL
+				if t, _ := x["type"].(string); t == "file" || t == "input_file" {
+					if _, hasFile := x["file"]; !hasFile {
+						file := map[string]any{
+							"file_id":   fileID,
+							"file_data": dataURL,
+						}
+						if filename, ok := x["filename"].(string); ok && filename != "" {
+							file["filename"] = filename
+						}
+						x["file"] = file
+					}
+				}
 				changed = true
 			}
 		}
