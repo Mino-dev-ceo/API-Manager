@@ -726,6 +726,36 @@ func FormatMatchingModelName(name string) string {
 	return name
 }
 
+func EquivalentMatchingModelNames(name string) []string {
+	formatted := FormatMatchingModelName(strings.TrimSpace(name))
+	if formatted == "" {
+		return []string{}
+	}
+	names := []string{formatted}
+	if strings.HasPrefix(formatted, "claude-") {
+		parts := strings.Split(formatted, "-")
+		if len(parts) >= 2 {
+			last := parts[len(parts)-1]
+			prev := parts[len(parts)-2]
+			if last != "" && prev != "" && isDigits(last) && isDigits(prev) {
+				aliasParts := append([]string{}, parts...)
+				aliasParts = append(aliasParts[:len(aliasParts)-2], prev+"."+last)
+				names = append(names, strings.Join(aliasParts, "-"))
+			}
+		}
+	}
+	return names
+}
+
+func isDigits(value string) bool {
+	for _, item := range value {
+		if item < '0' || item > '9' {
+			return false
+		}
+	}
+	return value != ""
+}
+
 // result: 倍率or价格， usePrice， exist
 func GetModelRatioOrPrice(model string) (float64, bool, bool) { // price or ratio
 	price, usePrice := GetModelPrice(model, false)

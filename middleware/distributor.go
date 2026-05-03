@@ -67,8 +67,14 @@ func Distribute() func(c *gin.Context) {
 				if !ok {
 					tokenModelLimit = map[string]bool{}
 				}
-				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
-				if _, ok := tokenModelLimit[matchName]; !ok {
+				allowed := false
+				for _, matchName := range ratio_setting.EquivalentMatchingModelNames(modelRequest.Model) {
+					if _, ok := tokenModelLimit[matchName]; ok {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
 					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
 				}
