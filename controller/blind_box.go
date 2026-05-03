@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -27,6 +28,7 @@ func OpenBlindBox(c *gin.Context) {
 	}
 	result, err := model.OpenBlindBox(c.GetInt("id"), req.PackageID)
 	if err != nil {
+		common.SysLog("blind box open failed: user_id=" + strconv.Itoa(c.GetInt("id")) + ", package_id=" + req.PackageID + ", err=" + err.Error())
 		common.ApiError(c, err)
 		return
 	}
