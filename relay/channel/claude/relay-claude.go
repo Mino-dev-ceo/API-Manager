@@ -47,6 +47,19 @@ func maybeMarkClaudeRefusal(c *gin.Context, stopReason string) {
 	}
 }
 
+func clientResponseModelName(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if model := strings.TrimSpace(info.OriginModelName); model != "" {
+		return model
+	}
+	if info.ChannelMeta != nil {
+		return strings.TrimSpace(info.UpstreamModelName)
+	}
+	return ""
+}
+
 func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
@@ -917,6 +930,9 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
 			return nil
 		}
+		if clientModel := clientResponseModelName(info); clientModel != "" {
+			response.Model = clientModel
+		}
 
 		err = helper.ObjectData(c, response)
 		if err != nil {
@@ -955,7 +971,11 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
-			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
+			model := info.UpstreamModelName
+			if clientModel := clientResponseModelName(info); clientModel != "" {
+				model = clientModel
+			}
+			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, model, openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
 				common.SysLog("send final response failed: " + err.Error())
@@ -1016,6 +1036,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		openaiResponse := ResponseClaude2OpenAI(&claudeResponse)
+		if clientModel := clientResponseModelName(info); clientModel != "" {
+			openaiResponse.Model = clientModel
+		}
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 		responseData, err = json.Marshal(openaiResponse)
 		if err != nil {
