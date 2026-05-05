@@ -27,6 +27,8 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
+	data = normalizeOpenAIResponseModelString(data, info)
+
 	if !forceFormat && !thinkToContent {
 		return helper.StringData(c, data)
 	}
@@ -263,6 +265,11 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if string(usageBeforePostProcessing) != string(usageAfterPostProcessing) {
 		usageModified = true
 	}
+	clientModel := clientResponseModelName(info)
+	if clientModel != "" {
+		simpleResponse.Model = clientModel
+		responseBody, _ = normalizeOpenAIResponseModelBytes(responseBody, clientModel)
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -273,6 +280,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			bodyMap["usage"] = simpleResponse.Usage
+			if clientModel != "" {
+				bodyMap["model"] = clientModel
+			}
 			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {

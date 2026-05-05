@@ -33,6 +33,57 @@ func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string
 	return nil
 }
 
+func clientResponseModelName(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if model := strings.TrimSpace(info.OriginModelName); model != "" {
+		return model
+	}
+	if info.ChannelMeta != nil {
+		return strings.TrimSpace(info.UpstreamModelName)
+	}
+	return ""
+}
+
+func normalizeOpenAIResponseModelBytes(responseBody []byte, model string) ([]byte, bool) {
+	model = strings.TrimSpace(model)
+	if model == "" || len(responseBody) == 0 {
+		return responseBody, false
+	}
+
+	var bodyMap map[string]interface{}
+	if err := common.Unmarshal(responseBody, &bodyMap); err != nil {
+		return responseBody, false
+	}
+
+	current, hasModel := bodyMap["model"].(string)
+	if hasModel && current == model {
+		return responseBody, false
+	}
+	if _, hasChoices := bodyMap["choices"]; !hasChoices && !hasModel {
+		return responseBody, false
+	}
+
+	bodyMap["model"] = model
+	normalized, err := common.Marshal(bodyMap)
+	if err != nil {
+		return responseBody, false
+	}
+	return normalized, true
+}
+
+func normalizeOpenAIResponseModelString(data string, info *relaycommon.RelayInfo) string {
+	if data == "" {
+		return data
+	}
+	normalized, changed := normalizeOpenAIResponseModelBytes(common.StringToByteSlice(data), clientResponseModelName(info))
+	if !changed {
+		return data
+	}
+	return string(normalized)
+}
+
 func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo) error {
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
@@ -201,6 +252,9 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		if info.ShouldIncludeUsage && !containStreamUsage {
+			if clientModel := clientResponseModelName(info); clientModel != "" {
+				model = clientModel
+			}
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
 			helper.ObjectData(c, response)
