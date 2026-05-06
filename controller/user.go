@@ -566,7 +566,7 @@ func GetUserModels(c *gin.Context) {
 			}
 		}
 	}
-	if c.GetInt("role") >= common.RoleAdminUser {
+	if len(models) == 0 || c.GetInt("role") >= common.RoleAdminUser {
 		for _, g := range model.GetEnabledModels() {
 			if !common.StringsContains(models, g) {
 				models = append(models, g)
