@@ -45,6 +45,35 @@ func GetGroupEnabledModels(group string) []string {
 	return models
 }
 
+func GetGroupEnabledChannelModels(group string) []string {
+	var rows []string
+	query := DB.Model(&Channel{}).Where("status = ?", common.ChannelStatusEnabled)
+	if group != "" && group != "null" {
+		if common.UsingMySQL {
+			query = query.Where("CONCAT(',', "+commonGroupCol+", ',') LIKE ?", "%,"+group+",%")
+		} else {
+			query = query.Where("(',' || "+commonGroupCol+" || ',') LIKE ?", "%,"+group+",%")
+		}
+	}
+	query.Distinct("models").Pluck("models", &rows)
+	modelSet := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, row := range rows {
+		for _, modelName := range strings.Split(row, ",") {
+			modelName = strings.TrimSpace(modelName)
+			if modelName == "" {
+				continue
+			}
+			if _, exists := modelSet[modelName]; exists {
+				continue
+			}
+			modelSet[modelName] = struct{}{}
+			models = append(models, modelName)
+		}
+	}
+	return models
+}
+
 func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models

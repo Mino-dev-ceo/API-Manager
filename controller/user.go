@@ -559,6 +559,15 @@ func GetUserModels(c *gin.Context) {
 			}
 		}
 	}
+	if len(models) == 0 {
+		for group := range groups {
+			for _, g := range model.GetGroupEnabledChannelModels(group) {
+				if !common.StringsContains(models, g) {
+					models = append(models, g)
+				}
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
