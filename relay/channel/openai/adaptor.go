@@ -60,6 +60,14 @@ func shouldPassThroughClaudeMessages(info *relaycommon.RelayInfo) bool {
 			strings.HasPrefix(upstreamModel, "claude-opus-4-"))
 }
 
+func shouldPreserveReasoningEffortSuffix(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	baseURL := strings.ToLower(info.ChannelBaseUrl)
+	return strings.Contains(baseURL, "windsurf") || info.ChannelSetting.PassThroughBodyEnabled
+}
+
 // parseReasoningEffortFromModelSuffix 从模型名称中解析推理级别
 // support OAI models: o1-mini/o3-mini/o4-mini/o1/o3 etc...
 // minimal effort only available in gpt-5
@@ -375,12 +383,14 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.LogProbs = nil
 		}
 
-		// 转换模型推理力度后缀
-		effort, originModel := parseReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
-			request.ReasoningEffort = effort
-			info.UpstreamModelName = originModel
-			request.Model = originModel
+		if !shouldPreserveReasoningEffortSuffix(info) {
+			// 转换模型推理力度后缀。WindsurfAPI 等透传上游把这些后缀作为真实模型名使用，不能剥离。
+			effort, originModel := parseReasoningEffortFromModelSuffix(info.UpstreamModelName)
+			if effort != "" {
+				request.ReasoningEffort = effort
+				info.UpstreamModelName = originModel
+				request.Model = originModel
+			}
 		}
 
 		info.ReasoningEffort = request.ReasoningEffort
@@ -620,17 +630,19 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
-	effort, originModel := parseReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" {
-		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
+	if !shouldPreserveReasoningEffortSuffix(info) {
+		// 转换模型推理力度后缀。WindsurfAPI 等透传上游把这些后缀作为真实模型名使用，不能剥离。
+		effort, originModel := parseReasoningEffortFromModelSuffix(request.Model)
+		if effort != "" {
+			if request.Reasoning == nil {
+				request.Reasoning = &dto.Reasoning{
+					Effort: effort,
+				}
+			} else {
+				request.Reasoning.Effort = effort
 			}
-		} else {
-			request.Reasoning.Effort = effort
+			request.Model = originModel
 		}
-		request.Model = originModel
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort

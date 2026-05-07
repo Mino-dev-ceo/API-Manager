@@ -142,3 +142,99 @@ func TestClaudeOpusMessagesUseAnthropicPassthroughForOpenAIChannel(t *testing.T)
 		t.Fatalf("GetRequestURL() = %q, want %q", gotURL, want)
 	}
 }
+
+func TestWindsurfOpenAIChannelPreservesGpt5EffortSuffix(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeChatCompletions,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "https://windsurfapi.minotoken.xyz",
+			UpstreamModelName: "gpt-5.4-none",
+		},
+	}
+	request := &dto.GeneralOpenAIRequest{
+		Model: "gpt-5.4-none",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hello"},
+		},
+	}
+
+	got, err := (&Adaptor{}).ConvertOpenAIRequest(nil, info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest returned error: %v", err)
+	}
+	gotRequest, ok := got.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		t.Fatalf("ConvertOpenAIRequest returned %T, want *dto.GeneralOpenAIRequest", got)
+	}
+	if gotRequest.Model != "gpt-5.4-none" {
+		t.Fatalf("request.Model = %q, want gpt-5.4-none", gotRequest.Model)
+	}
+	if info.UpstreamModelName != "gpt-5.4-none" {
+		t.Fatalf("info.UpstreamModelName = %q, want gpt-5.4-none", info.UpstreamModelName)
+	}
+	if info.ReasoningEffort != "" {
+		t.Fatalf("info.ReasoningEffort = %q, want empty", info.ReasoningEffort)
+	}
+}
+
+func TestOpenAIChannelStillExtractsGpt5EffortSuffixForOfficialUpstream(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeChatCompletions,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "https://api.openai.com",
+			UpstreamModelName: "gpt-5.4-none",
+		},
+	}
+	request := &dto.GeneralOpenAIRequest{
+		Model: "gpt-5.4-none",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hello"},
+		},
+	}
+
+	got, err := (&Adaptor{}).ConvertOpenAIRequest(nil, info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest returned error: %v", err)
+	}
+	gotRequest, ok := got.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		t.Fatalf("ConvertOpenAIRequest returned %T, want *dto.GeneralOpenAIRequest", got)
+	}
+	if gotRequest.Model != "gpt-5.4" {
+		t.Fatalf("request.Model = %q, want gpt-5.4", gotRequest.Model)
+	}
+	if gotRequest.ReasoningEffort != "none" {
+		t.Fatalf("request.ReasoningEffort = %q, want none", gotRequest.ReasoningEffort)
+	}
+	if info.UpstreamModelName != "gpt-5.4" {
+		t.Fatalf("info.UpstreamModelName = %q, want gpt-5.4", info.UpstreamModelName)
+	}
+}
+
+func TestWindsurfResponsesChannelPreservesGpt5EffortSuffix(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:    constant.ChannelTypeOpenAI,
+			ChannelBaseUrl: "https://windsurfapi.minotoken.xyz",
+		},
+	}
+	request := dto.OpenAIResponsesRequest{Model: "gpt-5.4-none"}
+
+	got, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+	gotRequest, ok := got.(dto.OpenAIResponsesRequest)
+	if !ok {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned %T, want dto.OpenAIResponsesRequest", got)
+	}
+	if gotRequest.Model != "gpt-5.4-none" {
+		t.Fatalf("request.Model = %q, want gpt-5.4-none", gotRequest.Model)
+	}
+	if gotRequest.Reasoning != nil {
+		t.Fatalf("request.Reasoning = %#v, want nil", gotRequest.Reasoning)
+	}
+}
