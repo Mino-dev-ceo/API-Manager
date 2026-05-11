@@ -33,6 +33,8 @@ type imageStorage struct {
 }
 
 var (
+	ErrImageStorageNotConfigured = errors.New("R2 storage is not configured")
+
 	imageStorageOnce sync.Once
 	imageStorageInst *imageStorage
 	imageStorageErr  error
@@ -57,7 +59,7 @@ func getImageStorage() (*imageStorage, error) {
 			region = "auto"
 		}
 		if bucket == "" || endpoint == "" || accessKey == "" || secretKey == "" {
-			imageStorageErr = errors.New("R2 storage is not configured")
+			imageStorageErr = ErrImageStorageNotConfigured
 			return
 		}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -88,6 +89,14 @@ func processImageTask(ctx context.Context, task *model.Task) {
 		maxRetries = 0
 	}
 	task.FailReason = compactImageTaskError(err)
+	if errors.Is(err, ErrImageStorageNotConfigured) {
+		task.Status = model.TaskStatusFailure
+		task.Progress = "100%"
+		task.FinishTime = time.Now().Unix()
+		_ = task.Update()
+		logger.LogError(ctx, fmt.Sprintf("image task %s failed because R2 storage is not configured", task.TaskID))
+		return
+	}
 	if task.PrivateData.Attempts <= maxRetries {
 		task.Status = model.TaskStatusQueued
 		task.Progress = "0%"
@@ -110,6 +119,9 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 	}
 	if strings.TrimSpace(task.PrivateData.RelayTokenKey) == "" {
 		return fmt.Errorf("missing relay token")
+	}
+	if _, err := getImageStorage(); err != nil {
+		return err
 	}
 	requestPath := task.PrivateData.RequestPath
 	if requestPath == "" {
