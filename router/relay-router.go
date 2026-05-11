@@ -73,6 +73,7 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		imageTaskRouter := relayV1Router.Group("/images/tasks")
 		imageTaskRouter.GET("/:task_id", controller.GetImageTask)
+		relayV1Router.GET("/images/history", controller.GetImageHistory)
 	}
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{

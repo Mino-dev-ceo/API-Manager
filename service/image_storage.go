@@ -119,6 +119,24 @@ func ImageObjectURL(ctx context.Context, key string) (string, error) {
 	return storage.objectURL(ctx, key)
 }
 
+func DeleteImageObject(ctx context.Context, key string) error {
+	if strings.TrimSpace(key) == "" {
+		return nil
+	}
+	storage, err := getImageStorage()
+	if err != nil {
+		return err
+	}
+	_, err = storage.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(storage.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete image object from R2: %w", err)
+	}
+	return nil
+}
+
 func (s *imageStorage) objectURL(ctx context.Context, key string) (string, error) {
 	if s.publicBase != "" {
 		escaped := strings.ReplaceAll(url.PathEscape(key), "%2F", "/")

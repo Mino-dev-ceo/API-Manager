@@ -78,6 +78,8 @@ type Properties struct {
 	Input             string `json:"input"`
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
+	ImageSize         string `json:"image_size,omitempty"`
+	ImageQuality      string `json:"image_quality,omitempty"`
 }
 
 func (m *Properties) Scan(val interface{}) error {

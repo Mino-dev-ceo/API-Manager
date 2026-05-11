@@ -173,16 +173,23 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 		return fmt.Errorf("image response contains no data")
 	}
 
+	imageObjects := make([]*ImageObject, 0, len(imageResp.Data))
 	for i := range imageResp.Data {
 		imageObject, err := persistImageTaskItem(ctx, task, i, &imageResp.Data[i])
 		if err != nil {
 			return err
 		}
+		imageObjects = append(imageObjects, imageObject)
 		imageResp.Data[i].Url = imageObject.URL
 		imageResp.Data[i].ObjectKey = imageObject.Key
 		imageResp.Data[i].B64Json = ""
 		if i == 0 {
 			task.PrivateData.ResultURL = imageObject.URL
+		}
+	}
+	for _, imageObject := range imageObjects {
+		if err := rememberImageHistory(ctx, task, imageObject); err != nil {
+			return err
 		}
 	}
 
@@ -221,6 +228,38 @@ func persistImageTaskItem(ctx context.Context, task *model.Task, index int, item
 		return nil, err
 	}
 	return obj, nil
+}
+
+func rememberImageHistory(ctx context.Context, task *model.Task, imageObject *ImageObject) error {
+	if imageObject == nil || imageObject.Key == "" {
+		return nil
+	}
+	quality := task.Properties.ImageQuality
+	if quality == "" {
+		quality = "standard"
+	}
+	deletedKeys, err := model.AddImageHistoryAndTrim(&model.ImageHistory{
+		UserId:    task.UserId,
+		TaskID:    task.TaskID,
+		ObjectKey: imageObject.Key,
+		Prompt:    task.Properties.Input,
+		Model:     task.Properties.OriginModelName,
+		Size:      task.Properties.ImageSize,
+		Quality:   quality,
+		Source:    "url",
+	}, model.ImageHistoryLimit)
+	if err != nil {
+		return fmt.Errorf("save image history: %w", err)
+	}
+	for _, key := range deletedKeys {
+		if key == imageObject.Key {
+			continue
+		}
+		if err := DeleteImageObject(ctx, key); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("delete old image history object %s failed: %v", key, err))
+		}
+	}
+	return nil
 }
 
 func downloadImageTaskURL(ctx context.Context, rawURL string) ([]byte, string, error) {

@@ -85,6 +85,8 @@ func createImageTask(c *gin.Context, relayMode int, action string, requestPath s
 		Properties: model.Properties{
 			Input:           imageReq.Prompt,
 			OriginModelName: imageReq.Model,
+			ImageSize:       imageReq.Size,
+			ImageQuality:    imageReq.Quality,
 		},
 		PrivateData: model.TaskPrivateData{
 			RelayTokenKey: c.GetString("token_key"),
@@ -134,6 +136,50 @@ func GetImageTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, imageTaskResponse(c, task))
+}
+
+func GetImageHistory(c *gin.Context) {
+	items, err := imageHistoryResponseItems(c, c.GetInt("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "server_error",
+			},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"items": items,
+		"limit": model.ImageHistoryLimit,
+	})
+}
+
+func imageHistoryResponseItems(c *gin.Context, userId int) ([]gin.H, error) {
+	rows, err := model.ListUserImageHistory(userId, model.ImageHistoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		url, err := service.ImageObjectURL(c.Request.Context(), row.ObjectKey)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, gin.H{
+			"id":         row.ID,
+			"task_id":    row.TaskID,
+			"src":        url,
+			"url":        url,
+			"source":     "url",
+			"prompt":     row.Prompt,
+			"model":      row.Model,
+			"size":       row.Size,
+			"quality":    row.Quality,
+			"created_at": row.CreatedAt,
+		})
+	}
+	return items, nil
 }
 
 func imageTaskResponse(c *gin.Context, task *model.Task) gin.H {
