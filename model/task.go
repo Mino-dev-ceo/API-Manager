@@ -100,6 +100,12 @@ type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	RelayTokenKey  string `json:"relay_token_key,omitempty"`  // 异步任务回放用户请求时使用的站内 token key
+	RequestBody    string `json:"request_body,omitempty"`     // base64 encoded original request body
+	RequestType    string `json:"request_type,omitempty"`     // original Content-Type
+	RequestPath    string `json:"request_path,omitempty"`     // internal relay path, e.g. /v1/images/generations
+	RequestMethod  string `json:"request_method,omitempty"`
+	Attempts       int    `json:"attempts,omitempty"`
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -307,7 +313,26 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("platform != ?", constant.TaskPlatformOpenAIImage).
+		Where("progress != ?", "100%").
+		Where("status != ?", TaskStatusFailure).
+		Where("status != ?", TaskStatusSuccess).
+		Limit(limit).
+		Order("id").
+		Find(&tasks).Error
+	if err != nil {
+		return nil
+	}
+	return tasks
+}
+
+func GetQueuedImageTasks(limit int) []*Task {
+	var tasks []*Task
+	err := DB.Where("platform = ?", constant.TaskPlatformOpenAIImage).
+		Where("status IN ?", []TaskStatus{TaskStatusNotStart, TaskStatusQueued}).
+		Order("id").
+		Limit(limit).
+		Find(&tasks).Error
 	if err != nil {
 		return nil
 	}

@@ -112,6 +112,10 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Async image generation/edit worker. It is enabled when IMAGE_TASKS_ENABLED=true
+	// or when R2 storage variables are present.
+	service.StartImageTaskWorker()
+
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)
