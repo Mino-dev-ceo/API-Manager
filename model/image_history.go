@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -32,6 +33,18 @@ func ListUserImageHistory(userId int, limit int) ([]*ImageHistory, error) {
 		Limit(limit).
 		Find(&items).Error
 	return items, err
+}
+
+func GetUserImageHistoryByObjectKey(userId int, objectKey string) (*ImageHistory, bool, error) {
+	var item ImageHistory
+	err := DB.Where("user_id = ? AND object_key = ?", userId, objectKey).First(&item).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &item, true, nil
 }
 
 func AddImageHistoryAndTrim(item *ImageHistory, limit int) ([]string, error) {

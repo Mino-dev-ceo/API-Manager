@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -117,6 +119,36 @@ func ImageObjectURL(ctx context.Context, key string) (string, error) {
 		return "", err
 	}
 	return storage.objectURL(ctx, key)
+}
+
+func ReadImageObject(ctx context.Context, key string) ([]byte, string, error) {
+	if strings.TrimSpace(key) == "" {
+		return nil, "", fmt.Errorf("image object key is empty")
+	}
+	storage, err := getImageStorage()
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := storage.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(storage.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("read image object from R2: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("read image object body: %w", err)
+	}
+	contentType := ""
+	if resp.ContentType != nil {
+		contentType = strings.Split(*resp.ContentType, ";")[0]
+	}
+	if contentType == "" || !strings.HasPrefix(contentType, "image/") {
+		contentType = http.DetectContentType(data)
+	}
+	return data, contentType, nil
 }
 
 func DeleteImageObject(ctx context.Context, key string) error {

@@ -169,6 +169,8 @@ func imageHistoryResponseItems(c *gin.Context, userId int) ([]gin.H, error) {
 		items = append(items, gin.H{
 			"id":         row.ID,
 			"task_id":    row.TaskID,
+			"object_key": row.ObjectKey,
+			"proxy_url":  imageContentProxyURL(row.ObjectKey),
 			"src":        url,
 			"url":        url,
 			"source":     "url",
@@ -229,6 +231,7 @@ func imageTaskResult(c *gin.Context, task *model.Task) (*dto.ImageResponse, erro
 			return nil, err
 		}
 		imageResp.Data[i].Url = url
+		imageResp.Data[i].ProxyUrl = imageContentProxyURL(imageResp.Data[i].ObjectKey)
 	}
 	return &imageResp, nil
 }
