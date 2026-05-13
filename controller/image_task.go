@@ -3,16 +3,23 @@ package controller
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +30,105 @@ func CreateImageGenerationTask(c *gin.Context) {
 
 func CreateImageEditTask(c *gin.Context) {
 	createImageTask(c, relayconstant.RelayModeImagesEdits, constant.TaskActionImageEdit, "/v1/images/edits")
+}
+
+func CreateUserImageGenerationTask(c *gin.Context) {
+	createUserImageTask(c, relayconstant.RelayModeImagesGenerations, constant.TaskActionImageGeneration, "/v1/images/generations")
+}
+
+func CreateUserImageEditTask(c *gin.Context) {
+	createUserImageTask(c, relayconstant.RelayModeImagesEdits, constant.TaskActionImageEdit, "/v1/images/edits")
+}
+
+func createUserImageTask(c *gin.Context, relayMode int, action string, requestPath string) {
+	if err := setupUserImageTaskToken(c); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "access_denied",
+			},
+		})
+		return
+	}
+	createImageTask(c, relayMode, action, requestPath)
+}
+
+func setupUserImageTaskToken(c *gin.Context) error {
+	tokenID, err := imageTaskTokenID(c)
+	if err != nil {
+		return err
+	}
+	userID := c.GetInt("id")
+	token, err := model.GetTokenByIds(tokenID, userID)
+	if err != nil {
+		return fmt.Errorf("API Key 不存在或不属于当前用户")
+	}
+	token, err = model.ValidateUserToken(token.Key)
+	if err != nil {
+		return fmt.Errorf("API Key 不可用，请检查状态、余额或过期时间")
+	}
+	if token.UserId != userID {
+		return fmt.Errorf("API Key 不属于当前用户")
+	}
+	if err := ensureImageTaskTokenIPAllowed(c, token); err != nil {
+		return err
+	}
+	if err := setupImageTaskUserGroup(c, token); err != nil {
+		return err
+	}
+	return middleware.SetupContextForToken(c, token)
+}
+
+func imageTaskTokenID(c *gin.Context) (int, error) {
+	raw := strings.TrimSpace(c.GetHeader("X-Mino-Token-Id"))
+	if raw == "" {
+		return 0, fmt.Errorf("缺少 X-Mino-Token-Id 请求头")
+	}
+	tokenID, err := strconv.Atoi(raw)
+	if err != nil || tokenID <= 0 {
+		return 0, fmt.Errorf("X-Mino-Token-Id 无效")
+	}
+	return tokenID, nil
+}
+
+func ensureImageTaskTokenIPAllowed(c *gin.Context, token *model.Token) error {
+	allowIPs := token.GetIpLimits()
+	if len(allowIPs) == 0 {
+		return nil
+	}
+	ip := net.ParseIP(c.ClientIP())
+	if ip == nil {
+		return fmt.Errorf("无法解析客户端 IP 地址")
+	}
+	if !common.IsIpInCIDRList(ip, allowIPs) {
+		return fmt.Errorf("您的 IP 不在令牌允许访问的列表中")
+	}
+	return nil
+}
+
+func setupImageTaskUserGroup(c *gin.Context, token *model.Token) error {
+	userCache, err := model.GetUserCache(token.UserId)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("CreateUserImageTask GetUserCache error for user %d: %v", token.UserId, err))
+		return errors.New(common.TranslateMessage(c, i18n.MsgDatabaseError))
+	}
+	if userCache.Status != common.UserStatusEnabled {
+		return errors.New(common.TranslateMessage(c, i18n.MsgAuthUserBanned))
+	}
+	userCache.WriteContext(c)
+
+	usingGroup := userCache.Group
+	if token.Group != "" {
+		if _, ok := service.GetUserUsableGroups(userCache.Group)[token.Group]; !ok {
+			return fmt.Errorf("无权访问 %s 分组", token.Group)
+		}
+		if !ratio_setting.ContainsGroupRatio(token.Group) && token.Group != "auto" {
+			return fmt.Errorf("分组 %s 已被弃用", token.Group)
+		}
+		usingGroup = token.Group
+	}
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
+	return nil
 }
 
 func createImageTask(c *gin.Context, relayMode int, action string, requestPath string) {
