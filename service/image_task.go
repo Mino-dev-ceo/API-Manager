@@ -35,7 +35,7 @@ func StartImageTaskWorker() {
 		common.SysLog("image task worker skipped on slave node")
 		return
 	}
-	concurrency := common.GetEnvOrDefault("IMAGE_WORKER_CONCURRENCY", 2)
+	concurrency := common.GetEnvOrDefault("IMAGE_WORKER_CONCURRENCY", 2000)
 	if concurrency <= 0 {
 		concurrency = 1
 	}
@@ -132,9 +132,9 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 		method = http.MethodPost
 	}
 
-	timeout := time.Duration(common.GetEnvOrDefault("IMAGE_TASK_TIMEOUT_SECONDS", 360)) * time.Second
+	timeout := time.Duration(common.GetEnvOrDefault("IMAGE_TASK_TIMEOUT_SECONDS", 1800)) * time.Second
 	if timeout <= 0 {
-		timeout = 360 * time.Second
+		timeout = 1800 * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -150,6 +150,12 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Mino-Async-Image-Task", task.TaskID)
+	if task.ChannelId > 0 {
+		req.Header.Set("X-Mino-Async-Channel-Id", strconv.Itoa(task.ChannelId))
+	}
+	if secret := strings.TrimSpace(os.Getenv("IMAGE_INTERNAL_RELAY_SECRET")); secret != "" {
+		req.Header.Set("X-Mino-Async-Relay-Secret", secret)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

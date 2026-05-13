@@ -1,9 +1,12 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,7 +39,21 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
-		if ok {
+		if asyncChannelID, pinned, pinErr := trustedAsyncImageRelayChannelID(c); pinned {
+			if pinErr != nil {
+				abortWithOpenAiMessage(c, http.StatusForbidden, pinErr.Error())
+				return
+			}
+			channel, err = model.GetChannelById(asyncChannelID, true)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
+				return
+			}
+			if channel.Status != common.ChannelStatusEnabled {
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+		} else if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
@@ -168,6 +185,39 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func trustedAsyncImageRelayChannelID(c *gin.Context) (int, bool, error) {
+	taskID := strings.TrimSpace(c.GetHeader("X-Mino-Async-Image-Task"))
+	rawChannelID := strings.TrimSpace(c.GetHeader("X-Mino-Async-Channel-Id"))
+	if taskID == "" && rawChannelID == "" {
+		return 0, false, nil
+	}
+	if taskID == "" || rawChannelID == "" {
+		return 0, true, errors.New("invalid async image relay headers")
+	}
+	channelID, err := strconv.Atoi(rawChannelID)
+	if err != nil || channelID <= 0 {
+		return 0, true, errors.New("invalid async image relay channel id")
+	}
+
+	secret := strings.TrimSpace(os.Getenv("IMAGE_INTERNAL_RELAY_SECRET"))
+	if secret != "" {
+		provided := strings.TrimSpace(c.GetHeader("X-Mino-Async-Relay-Secret"))
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
+			return 0, true, errors.New("invalid async image relay secret")
+		}
+		return channelID, true, nil
+	}
+	if !isLoopbackClientIP(c.ClientIP()) {
+		return 0, true, errors.New("async image relay channel pin requires IMAGE_INTERNAL_RELAY_SECRET for non-local calls")
+	}
+	return channelID, true, nil
+}
+
+func isLoopbackClientIP(rawIP string) bool {
+	ip := net.ParseIP(strings.TrimSpace(rawIP))
+	return ip != nil && ip.IsLoopback()
 }
 
 // getModelFromRequest 从请求中读取模型信息
