@@ -651,6 +651,22 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if shouldUseCPAAsyncImageRelay(c, info) {
+		bodyBytes, err := io.ReadAll(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("read async image request body failed: %w", err)
+		}
+		resp, fallbackToSync, err := a.doCPAAsyncImageRequest(c, info, bodyBytes)
+		if err == nil {
+			return resp, nil
+		}
+		if !fallbackToSync {
+			return nil, err
+		}
+		logger.LogWarn(c, fmt.Sprintf("cpa async image relay fallback to sync: %v", err))
+		requestBody = bytes.NewReader(bodyBytes)
+	}
+
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
 		info.RelayMode == relayconstant.RelayModeImagesEdits {
