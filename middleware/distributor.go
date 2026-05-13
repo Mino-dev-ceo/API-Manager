@@ -193,7 +193,10 @@ func trustedAsyncImageRelayChannelID(c *gin.Context) (int, bool, error) {
 	if taskID == "" && rawChannelID == "" {
 		return 0, false, nil
 	}
-	if taskID == "" || rawChannelID == "" {
+	if rawChannelID == "" {
+		return 0, false, nil
+	}
+	if taskID == "" {
 		return 0, true, errors.New("invalid async image relay headers")
 	}
 	channelID, err := strconv.Atoi(rawChannelID)
