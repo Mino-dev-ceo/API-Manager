@@ -62,3 +62,12 @@ func TestDecodeImageDataURLRejectsNonImage(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestNormalizeImagePublicBaseURLAddsHTTPS(t *testing.T) {
+	if got := normalizeImagePublicBaseURL("image.minotoken.xyz/"); got != "https://image.minotoken.xyz" {
+		t.Fatalf("public base = %q, want https://image.minotoken.xyz", got)
+	}
+	if got := normalizeImagePublicBaseURL("https://image.minotoken.xyz/"); got != "https://image.minotoken.xyz" {
+		t.Fatalf("public base = %q, want https://image.minotoken.xyz", got)
+	}
+}

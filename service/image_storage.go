@@ -75,12 +75,23 @@ func getImageStorage() (*imageStorage, error) {
 		})
 		imageStorageInst = &imageStorage{
 			bucket:     bucket,
-			publicBase: strings.TrimRight(strings.TrimSpace(os.Getenv("R2_PUBLIC_BASE_URL")), "/"),
+			publicBase: normalizeImagePublicBaseURL(os.Getenv("R2_PUBLIC_BASE_URL")),
 			client:     client,
 			presigner:  s3.NewPresignClient(client),
 		}
 	})
 	return imageStorageInst, imageStorageErr
+}
+
+func normalizeImagePublicBaseURL(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	return "https://" + raw
 }
 
 func PutImageObject(ctx context.Context, key string, contentType string, data []byte) (*ImageObject, error) {

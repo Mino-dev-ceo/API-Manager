@@ -181,9 +181,15 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 
 	imageObjects := make([]*ImageObject, 0, len(imageResp.Data))
 	for i := range imageResp.Data {
-		imageObject, err := persistImageTaskItem(ctx, task, i, &imageResp.Data[i])
+		imageObject, err := existingImageTaskObject(ctx, &imageResp.Data[i])
 		if err != nil {
 			return err
+		}
+		if imageObject == nil {
+			imageObject, err = persistImageTaskItem(ctx, task, i, &imageResp.Data[i])
+			if err != nil {
+				return err
+			}
 		}
 		imageObjects = append(imageObjects, imageObject)
 		imageResp.Data[i].Url = imageObject.URL
@@ -205,6 +211,28 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 	task.FinishTime = time.Now().Unix()
 	task.FailReason = ""
 	return task.Update()
+}
+
+func existingImageTaskObject(ctx context.Context, item *dto.ImageData) (*ImageObject, error) {
+	if item == nil || strings.TrimSpace(item.B64Json) != "" {
+		return nil, nil
+	}
+	objectKey := strings.TrimSpace(item.ObjectKey)
+	if objectKey == "" {
+		return nil, nil
+	}
+	objectURL := strings.TrimSpace(item.Url)
+	if objectURL == "" || !strings.HasPrefix(strings.ToLower(objectURL), "http://") && !strings.HasPrefix(strings.ToLower(objectURL), "https://") {
+		url, err := ImageObjectURL(ctx, objectKey)
+		if err != nil {
+			return nil, err
+		}
+		objectURL = url
+	}
+	return &ImageObject{
+		Key: objectKey,
+		URL: objectURL,
+	}, nil
 }
 
 func persistImageTaskItem(ctx context.Context, task *model.Task, index int, item *dto.ImageData) (*ImageObject, error) {
