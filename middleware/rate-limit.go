@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -106,23 +105,16 @@ func GlobalAPIRateLimit() func(c *gin.Context) {
 	if common.GlobalApiRateLimitEnable {
 		limiter := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
 		return func(c *gin.Context) {
-			if shouldSkipGlobalAPIRateLimit(c) {
+			switch c.Request.URL.Path {
+			case "/api/blind-box/packages", "/api/blind-box/open", "/api/user/blind-box/packages", "/api/user/blind-box/open":
 				c.Next()
 				return
+			default:
+				limiter(c)
 			}
-			limiter(c)
 		}
 	}
 	return defNext
-}
-
-func shouldSkipGlobalAPIRateLimit(c *gin.Context) bool {
-	switch c.Request.URL.Path {
-	case "/api/blind-box/packages", "/api/blind-box/open", "/api/user/blind-box/packages", "/api/user/blind-box/open":
-		return true
-	default:
-	}
-	return c.Request.Method == http.MethodGet && strings.HasPrefix(c.Request.URL.Path, "/api/user/images/tasks/")
 }
 
 func CriticalRateLimit() func(c *gin.Context) {
