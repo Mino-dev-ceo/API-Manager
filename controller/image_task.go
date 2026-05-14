@@ -302,8 +302,10 @@ func imageTaskResponse(c *gin.Context, task *model.Task) gin.H {
 		"completed_at": task.FinishTime,
 		"model":        task.Properties.OriginModelName,
 	}
-	if task.FailReason != "" {
+	if task.FailReason != "" && task.Status == model.TaskStatusFailure {
 		resp["error"] = gin.H{"message": task.FailReason}
+	} else if task.FailReason != "" {
+		resp["last_error"] = gin.H{"message": task.FailReason}
 	}
 	if task.Status == model.TaskStatusSuccess {
 		imageResp, err := imageTaskResult(c, task)
