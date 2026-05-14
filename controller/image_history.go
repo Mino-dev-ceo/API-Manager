@@ -2,7 +2,6 @@ package controller
 
 import (
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -47,9 +46,5 @@ func GetUserImageContent(c *gin.Context) {
 }
 
 func imageContentProxyURL(objectKey string) string {
-	objectKey = strings.TrimSpace(objectKey)
-	if objectKey == "" {
-		return ""
-	}
-	return "/api/user/image-content?key=" + url.QueryEscape(objectKey)
+	return service.ImageContentProxyURL(objectKey)
 }

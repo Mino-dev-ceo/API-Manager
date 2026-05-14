@@ -208,23 +208,9 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 }
 
 func persistImageTaskItem(ctx context.Context, task *model.Task, index int, item *dto.ImageData) (*ImageObject, error) {
-	var data []byte
-	var contentType string
-	var err error
-
-	if item.B64Json != "" {
-		data, err = base64.StdEncoding.DecodeString(item.B64Json)
-		if err != nil {
-			return nil, fmt.Errorf("decode generated image %d: %w", index+1, err)
-		}
-		contentType = http.DetectContentType(data)
-	} else if item.Url != "" {
-		data, contentType, err = downloadImageTaskURL(ctx, item.Url)
-		if err != nil {
-			return nil, fmt.Errorf("download generated image %d: %w", index+1, err)
-		}
-	} else {
-		return nil, fmt.Errorf("generated image %d has no url or b64_json", index+1)
+	data, contentType, err := imageDataBytesFromItem(ctx, index, item, true)
+	if err != nil {
+		return nil, err
 	}
 
 	ext := imageExtension(contentType)
