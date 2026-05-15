@@ -191,10 +191,10 @@ func (a *Adaptor) pollCPAAsyncImageTaskOnce(c *gin.Context, info *relaycommon.Re
 		if message, failed := cpaAsyncUpscaleFailureMessage(body); failed {
 			return nil, true, fmt.Errorf("cpa async image upscale failed: %s", message)
 		}
-		finalBody, err := cpaAsyncExtractImageResponse(body)
-		if err != nil && cpaAsyncUpscaleStillPending(body) {
+		if cpaAsyncUpscaleStillPending(body) {
 			return nil, false, nil
 		}
+		finalBody, err := cpaAsyncExtractImageResponse(body)
 		return finalBody, true, err
 	case "failed", "failure", "error":
 		return nil, true, fmt.Errorf("cpa async image task failed: %s", cpaAsyncTaskErrorMessage(body))
@@ -316,18 +316,21 @@ func cpaAsyncExtractImageResponse(body []byte) ([]byte, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("parse cpa async image task result failed: %w", err)
 	}
+	finalData, hasFinalData := cpaAsyncFinalURLData(raw)
+	if hasFinalData {
+		return cpaAsyncBuildImageResponse(raw, finalData)
+	}
 	if response, ok := raw["response"]; ok && len(bytes.TrimSpace(response)) > 0 && !bytes.Equal(bytes.TrimSpace(response), []byte("null")) {
 		return response, nil
 	}
 	data, ok := raw["data"]
 	if !ok || len(bytes.TrimSpace(data)) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		finalData, hasFinalData := cpaAsyncFinalURLData(raw)
-		if !hasFinalData {
-			return nil, fmt.Errorf("cpa async image task result missing image data")
-		}
-		data = finalData
+		return nil, fmt.Errorf("cpa async image task result missing image data")
 	}
+	return cpaAsyncBuildImageResponse(raw, data)
+}
 
+func cpaAsyncBuildImageResponse(raw map[string]json.RawMessage, data json.RawMessage) ([]byte, error) {
 	out := map[string]json.RawMessage{
 		"data": data,
 	}
@@ -359,7 +362,43 @@ func cpaAsyncFinalURLData(raw map[string]json.RawMessage) (json.RawMessage, bool
 			return data, err == nil
 		}
 	}
-	return nil, false
+	jobs := make([]cpaAsyncUpscaleJob, 0, 1)
+	if value, ok := raw["upscale_job"]; ok && len(bytes.TrimSpace(value)) > 0 && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		var job cpaAsyncUpscaleJob
+		if err := json.Unmarshal(value, &job); err == nil {
+			jobs = append(jobs, job)
+		}
+	}
+	if value, ok := raw["upscale_jobs"]; ok && len(bytes.TrimSpace(value)) > 0 && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		var list []cpaAsyncUpscaleJob
+		if err := json.Unmarshal(value, &list); err == nil {
+			jobs = append(jobs, list...)
+		}
+	}
+	if len(jobs) == 0 {
+		return nil, false
+	}
+	data := make([]map[string]string, 0, len(jobs))
+	for _, job := range jobs {
+		if !cpaAsyncUpscaleJobSucceeded(job) {
+			return nil, false
+		}
+		url := strings.TrimSpace(job.ResultImageURL)
+		if url == "" {
+			return nil, false
+		}
+		data = append(data, map[string]string{"url": url})
+	}
+	finalData, err := json.Marshal(data)
+	return finalData, err == nil
+}
+
+func cpaAsyncUpscaleJobSucceeded(job cpaAsyncUpscaleJob) bool {
+	status := cpaAsyncNormalizeStatus(job.Status)
+	if status == "succeeded" {
+		return true
+	}
+	return status == "" && strings.TrimSpace(job.ResultImageURL) != ""
 }
 
 type cpaAsyncUpscalePayload struct {
@@ -369,9 +408,10 @@ type cpaAsyncUpscalePayload struct {
 }
 
 type cpaAsyncUpscaleJob struct {
-	Status       string          `json:"status"`
-	ErrorMessage string          `json:"error_message"`
-	Error        json.RawMessage `json:"error"`
+	Status         string          `json:"status"`
+	ResultImageURL string          `json:"result_image_url"`
+	ErrorMessage   string          `json:"error_message"`
+	Error          json.RawMessage `json:"error"`
 }
 
 func cpaAsyncUpscaleStillPending(body []byte) bool {
@@ -384,14 +424,13 @@ func cpaAsyncUpscaleStillPending(body []byte) bool {
 		return true
 	}
 	for _, job := range jobs {
-		switch cpaAsyncNormalizeStatus(job.Status) {
-		case "succeeded":
+		if cpaAsyncUpscaleJobSucceeded(job) {
 			continue
-		case "failed":
-			return false
-		default:
-			return true
 		}
+		if cpaAsyncNormalizeStatus(job.Status) == "failed" {
+			return false
+		}
+		return true
 	}
 	return false
 }

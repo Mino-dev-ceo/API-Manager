@@ -110,6 +110,13 @@ func TestCPAAsyncUpscaleStillPendingAfterSourceGeneration(t *testing.T) {
 	}
 }
 
+func TestCPAAsyncUpscaleStillPendingEvenWithSourceResponse(t *testing.T) {
+	body := []byte(`{"status":"succeeded","upscale":true,"response":{"created":123,"data":[{"url":"https://example.com/source-2k.png"}]},"upscale_job":{"id":"job_1","status":"running"}}`)
+	if !cpaAsyncUpscaleStillPending(body) {
+		t.Fatal("expected running upscale job to keep polling even when source response is present")
+	}
+}
+
 func TestCPAAsyncUpscaleFailureMessage(t *testing.T) {
 	body := []byte(`{"status":"succeeded","upscale":true,"upscale_job":{"id":"job_1","status":"failed","error_message":"worker failed"}}`)
 	message, failed := cpaAsyncUpscaleFailureMessage(body)
@@ -134,6 +141,23 @@ func TestCPAAsyncExtractImageResponseBuildsFromFinalURL(t *testing.T) {
 	}
 	data := payload["data"].([]any)
 	if data[0].(map[string]any)["url"] != "https://example.com/final.png" {
+		t.Fatalf("unexpected data: %#v", data)
+	}
+}
+
+func TestCPAAsyncExtractImageResponsePrefersUpscaleJobResult(t *testing.T) {
+	body := []byte(`{"status":"succeeded","upscale":true,"response":{"created":123,"data":[{"url":"https://example.com/source-2k.png"}]},"upscale_job":{"id":"job_1","status":"succeeded","result_image_url":"https://example.com/final-4k.png"}}`)
+	got, err := cpaAsyncExtractImageResponse(body)
+	if err != nil {
+		t.Fatalf("cpaAsyncExtractImageResponse returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("final response is not json: %v", err)
+	}
+	data := payload["data"].([]any)
+	if data[0].(map[string]any)["url"] != "https://example.com/final-4k.png" {
 		t.Fatalf("unexpected data: %#v", data)
 	}
 }
