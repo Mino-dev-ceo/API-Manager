@@ -70,6 +70,11 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
+	{
+		imageTaskRouter := relayV1Router.Group("/images/tasks")
+		imageTaskRouter.GET("/:task_id", controller.GetImageTask)
+		relayV1Router.GET("/images/history", controller.GetImageHistory)
+	}
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
 		// OpenAI Files compatibility. Keep these outside Distribute() because
@@ -117,6 +122,8 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// image related routes
+		httpRouter.POST("/images/generations/async", controller.CreateImageGenerationTask)
+		httpRouter.POST("/images/edits/async", controller.CreateImageEditTask)
 		httpRouter.POST("/edits", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIImage)
 		})

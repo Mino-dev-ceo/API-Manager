@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ai360"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
 
 	//"github.com/QuantumNous/new-api/relay/channel/minimax"
@@ -37,6 +38,34 @@ import (
 type Adaptor struct {
 	ChannelType    int
 	ResponseFormat string
+}
+
+func shouldPassThroughClaudeMessages(info *relaycommon.RelayInfo) bool {
+	baseURL := ""
+	originModel := ""
+	upstreamModel := ""
+	if info != nil {
+		baseURL = strings.ToLower(info.ChannelBaseUrl)
+		originModel = strings.ToLower(info.OriginModelName)
+		upstreamModel = strings.ToLower(info.UpstreamModelName)
+	}
+	return info != nil &&
+		info.RelayFormat == types.RelayFormatClaude &&
+		info.RelayMode != relayconstant.RelayModeResponses &&
+		info.RelayMode != relayconstant.RelayModeResponsesCompact &&
+		(model_setting.GetGlobalSettings().PassThroughRequestEnabled ||
+			info.ChannelSetting.PassThroughBodyEnabled ||
+			strings.Contains(baseURL, "windsurf") ||
+			strings.HasPrefix(originModel, "claude-opus-4-") ||
+			strings.HasPrefix(upstreamModel, "claude-opus-4-"))
+}
+
+func shouldPreserveReasoningEffortSuffix(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	baseURL := strings.ToLower(info.ChannelBaseUrl)
+	return strings.Contains(baseURL, "windsurf") || info.ChannelSetting.PassThroughBodyEnabled
 }
 
 // parseReasoningEffortFromModelSuffix 从模型名称中解析推理级别
@@ -177,6 +206,9 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
 		return url, nil
 	default:
+		if shouldPassThroughClaudeMessages(info) {
+			return fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl), nil
+		}
 		if (info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatGemini) &&
 			info.RelayMode != relayconstant.RelayModeResponses &&
 			info.RelayMode != relayconstant.RelayModeResponsesCompact {
@@ -188,6 +220,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, header)
+	if shouldPassThroughClaudeMessages(info) {
+		header.Set("x-api-key", info.ApiKey)
+		anthropicVersion := c.Request.Header.Get("anthropic-version")
+		if anthropicVersion == "" {
+			anthropicVersion = "2023-06-01"
+		}
+		header.Set("anthropic-version", anthropicVersion)
+		claude.CommonClaudeHeadersOperation(c, header, info)
+		return nil
+	}
 	if info.ChannelType == constant.ChannelTypeAzure {
 		header.Set("api-key", info.ApiKey)
 		return nil
@@ -341,12 +383,14 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.LogProbs = nil
 		}
 
-		// 转换模型推理力度后缀
-		effort, originModel := parseReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
-			request.ReasoningEffort = effort
-			info.UpstreamModelName = originModel
-			request.Model = originModel
+		if !shouldPreserveReasoningEffortSuffix(info) {
+			// 转换模型推理力度后缀。WindsurfAPI 等透传上游把这些后缀作为真实模型名使用，不能剥离。
+			effort, originModel := parseReasoningEffortFromModelSuffix(info.UpstreamModelName)
+			if effort != "" {
+				request.ReasoningEffort = effort
+				info.UpstreamModelName = originModel
+				request.Model = originModel
+			}
 		}
 
 		info.ReasoningEffort = request.ReasoningEffort
@@ -586,17 +630,19 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
-	effort, originModel := parseReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" {
-		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
+	if !shouldPreserveReasoningEffortSuffix(info) {
+		// 转换模型推理力度后缀。WindsurfAPI 等透传上游把这些后缀作为真实模型名使用，不能剥离。
+		effort, originModel := parseReasoningEffortFromModelSuffix(request.Model)
+		if effort != "" {
+			if request.Reasoning == nil {
+				request.Reasoning = &dto.Reasoning{
+					Effort: effort,
+				}
+			} else {
+				request.Reasoning.Effort = effort
 			}
-		} else {
-			request.Reasoning.Effort = effort
+			request.Model = originModel
 		}
-		request.Model = originModel
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort
@@ -605,6 +651,22 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if shouldUseCPAAsyncImageRelay(c, info) {
+		bodyBytes, err := io.ReadAll(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("read async image request body failed: %w", err)
+		}
+		resp, fallbackToSync, err := a.doCPAAsyncImageRequest(c, info, bodyBytes)
+		if err == nil {
+			return resp, nil
+		}
+		if !fallbackToSync {
+			return nil, err
+		}
+		logger.LogWarn(c, fmt.Sprintf("cpa async image relay fallback to sync: %v", err))
+		requestBody = bytes.NewReader(bodyBytes)
+	}
+
 	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
 		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
 		info.RelayMode == relayconstant.RelayModeImagesEdits {
@@ -617,6 +679,13 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if shouldPassThroughClaudeMessages(info) {
+		info.FinalRequestRelayFormat = types.RelayFormatClaude
+		if info.IsStream {
+			return claude.ClaudeStreamHandler(c, resp, info)
+		}
+		return claude.ClaudeHandler(c, resp, info)
+	}
 	switch info.RelayMode {
 	case relayconstant.RelayModeRealtime:
 		err, usage = OpenaiRealtimeHandler(c, info)

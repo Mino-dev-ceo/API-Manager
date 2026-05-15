@@ -3,8 +3,9 @@ package constant
 type TaskPlatform string
 
 const (
-	TaskPlatformSuno       TaskPlatform = "suno"
-	TaskPlatformMidjourney              = "mj"
+	TaskPlatformSuno        TaskPlatform = "suno"
+	TaskPlatformMidjourney               = "mj"
+	TaskPlatformOpenAIImage              = "openai_image"
 )
 
 const (
@@ -16,6 +17,8 @@ const (
 	TaskActionFirstTailGenerate = "firstTailGenerate"
 	TaskActionReferenceGenerate = "referenceGenerate"
 	TaskActionRemix             = "remixGenerate"
+	TaskActionImageGeneration   = "imageGeneration"
+	TaskActionImageEdit         = "imageEdit"
 )
 
 var SunoModel2Action = map[string]string{

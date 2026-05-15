@@ -166,6 +166,10 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 // ModelRequestRateLimit 模型请求限流中间件
 func ModelRequestRateLimit() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		if shouldSkipModelRequestRateLimit(c) {
+			c.Next()
+			return
+		}
 		// 在每个请求时检查是否启用限流
 		if !setting.ModelRequestRateLimitEnabled {
 			c.Next()
@@ -196,5 +200,17 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 		} else {
 			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
 		}
+	}
+}
+
+func shouldSkipModelRequestRateLimit(c *gin.Context) bool {
+	if c.GetHeader("X-Mino-Async-Image-Task") != "" {
+		return true
+	}
+	switch c.Request.URL.Path {
+	case "/v1/images/generations/async", "/v1/images/edits/async":
+		return true
+	default:
+		return false
 	}
 }

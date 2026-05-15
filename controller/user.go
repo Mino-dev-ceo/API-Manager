@@ -551,9 +551,52 @@ func GetUserModels(c *gin.Context) {
 		return
 	}
 	groups := service.GetUserUsableGroups(user.Group)
+	requestedGroup := strings.TrimSpace(c.Query("group"))
+	appendUniqueModels := func(target []string, items []string) []string {
+		for _, item := range items {
+			if item == "" || common.StringsContains(target, item) {
+				continue
+			}
+			target = append(target, item)
+		}
+		return target
+	}
+	collectGroupModels := func(group string) []string {
+		models := make([]string, 0)
+		if group == "auto" {
+			for _, autoGroup := range service.GetUserAutoGroup(user.Group) {
+				models = appendUniqueModels(models, model.GetGroupEnabledModels(autoGroup))
+				models = appendUniqueModels(models, model.GetGroupEnabledChannelModels(autoGroup))
+			}
+			return models
+		}
+		models = appendUniqueModels(models, model.GetGroupEnabledModels(group))
+		models = appendUniqueModels(models, model.GetGroupEnabledChannelModels(group))
+		return models
+	}
 	var models []string
-	for group := range groups {
-		for _, g := range model.GetGroupEnabledModels(group) {
+	if requestedGroup != "" {
+		if _, ok := groups[requestedGroup]; !ok {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"message": "",
+				"data":    []string{},
+			})
+			return
+		}
+		models = collectGroupModels(requestedGroup)
+	} else {
+		for group := range groups {
+			models = appendUniqueModels(models, collectGroupModels(group))
+		}
+	}
+	if requestedGroup == "" && (len(models) == 0 || c.GetInt("role") >= common.RoleAdminUser) {
+		for _, g := range model.GetEnabledModels() {
+			if !common.StringsContains(models, g) {
+				models = append(models, g)
+			}
+		}
+		for _, g := range model.GetGroupEnabledChannelModels("") {
 			if !common.StringsContains(models, g) {
 				models = append(models, g)
 			}
