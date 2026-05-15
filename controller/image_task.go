@@ -152,6 +152,9 @@ func createImageTask(c *gin.Context, relayMode int, action string, requestPath s
 		})
 		return
 	}
+	if !ensureImageTaskChannel(c, imageReq) {
+		return
+	}
 
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -242,6 +245,61 @@ func GetImageTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, imageTaskResponse(c, task))
+}
+
+func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
+	if common.GetContextKeyInt(c, constant.ContextKeyChannelId) > 0 {
+		return true
+	}
+	if imageReq == nil || strings.TrimSpace(imageReq.Model) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"message": "model is required",
+				"type":    "invalid_request_error",
+			},
+		})
+		return false
+	}
+
+	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+		Ctx:        c,
+		ModelName:  imageReq.Model,
+		TokenGroup: usingGroup,
+		Retry:      common.GetPointer(0),
+	})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": fmt.Sprintf("获取分组 %s 下模型 %s 的可用渠道失败: %s", selectGroup, imageReq.Model, err.Error()),
+				"type":    "service_unavailable",
+			},
+		})
+		return false
+	}
+	if channel == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": fmt.Sprintf("分组 %s 下模型 %s 的可用渠道不存在", selectGroup, imageReq.Model),
+				"type":    "service_unavailable",
+			},
+		})
+		return false
+	}
+	if newAPIError := middleware.SetupContextForSelectedChannel(c, channel, imageReq.Model); newAPIError != nil {
+		status := newAPIError.StatusCode
+		if status <= 0 {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{
+			"error": gin.H{
+				"message": newAPIError.MaskSensitiveError(),
+				"type":    "service_unavailable",
+			},
+		})
+		return false
+	}
+	return true
 }
 
 func GetImageHistory(c *gin.Context) {
