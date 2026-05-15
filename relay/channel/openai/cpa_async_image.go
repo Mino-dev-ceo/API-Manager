@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -56,18 +57,23 @@ func shouldUseCPAAsyncImageRelay(c *gin.Context, info *relaycommon.RelayInfo) bo
 	case "1", "true", "enabled", "enable", "on", cpaAsyncRelayModeForce:
 		return true
 	default:
-		return looksLikeCPAAsyncUpstream(info.ChannelBaseUrl)
+		return looksLikeCPAAsyncUpstream(
+			info.ChannelBaseUrl,
+			common.GetContextKeyString(c, constant.ContextKeyChannelName),
+		)
 	}
 }
 
-func looksLikeCPAAsyncUpstream(baseURL string) bool {
-	host := strings.ToLower(strings.TrimSpace(baseURL))
-	if host == "" {
-		return false
-	}
-	for _, marker := range []string{"cli-proxy", "cliproxy", "cpa", "codex"} {
-		if strings.Contains(host, marker) {
-			return true
+func looksLikeCPAAsyncUpstream(values ...string) bool {
+	for _, value := range values {
+		text := strings.ToLower(strings.TrimSpace(value))
+		if text == "" {
+			continue
+		}
+		for _, marker := range []string{"cli-proxy", "cliproxy", "cpa", "codex"} {
+			if strings.Contains(text, marker) {
+				return true
+			}
 		}
 	}
 	return false
@@ -182,7 +188,13 @@ func (a *Adaptor) pollCPAAsyncImageTaskOnce(c *gin.Context, info *relaycommon.Re
 	status := strings.ToLower(strings.TrimSpace(cpaAsyncJSONField(body, "status")))
 	switch status {
 	case "succeeded", "success", "completed", "complete":
+		if message, failed := cpaAsyncUpscaleFailureMessage(body); failed {
+			return nil, true, fmt.Errorf("cpa async image upscale failed: %s", message)
+		}
 		finalBody, err := cpaAsyncExtractImageResponse(body)
+		if err != nil && cpaAsyncUpscaleStillPending(body) {
+			return nil, false, nil
+		}
 		return finalBody, true, err
 	case "failed", "failure", "error":
 		return nil, true, fmt.Errorf("cpa async image task failed: %s", cpaAsyncTaskErrorMessage(body))
@@ -309,7 +321,11 @@ func cpaAsyncExtractImageResponse(body []byte) ([]byte, error) {
 	}
 	data, ok := raw["data"]
 	if !ok || len(bytes.TrimSpace(data)) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return nil, fmt.Errorf("cpa async image task result missing image data")
+		finalData, hasFinalData := cpaAsyncFinalURLData(raw)
+		if !hasFinalData {
+			return nil, fmt.Errorf("cpa async image task result missing image data")
+		}
+		data = finalData
 	}
 
 	out := map[string]json.RawMessage{
@@ -329,6 +345,125 @@ func cpaAsyncExtractImageResponse(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("build cpa async image final response failed: %w", err)
 	}
 	return finalBody, nil
+}
+
+func cpaAsyncFinalURLData(raw map[string]json.RawMessage) (json.RawMessage, bool) {
+	for _, field := range []string{"final_url", "result_image_url"} {
+		value, ok := raw[field]
+		if !ok {
+			continue
+		}
+		var finalURL string
+		if err := json.Unmarshal(value, &finalURL); err == nil && strings.TrimSpace(finalURL) != "" {
+			data, err := json.Marshal([]map[string]string{{"url": strings.TrimSpace(finalURL)}})
+			return data, err == nil
+		}
+	}
+	return nil, false
+}
+
+type cpaAsyncUpscalePayload struct {
+	Upscale     bool                 `json:"upscale"`
+	UpscaleJob  *cpaAsyncUpscaleJob  `json:"upscale_job"`
+	UpscaleJobs []cpaAsyncUpscaleJob `json:"upscale_jobs"`
+}
+
+type cpaAsyncUpscaleJob struct {
+	Status       string          `json:"status"`
+	ErrorMessage string          `json:"error_message"`
+	Error        json.RawMessage `json:"error"`
+}
+
+func cpaAsyncUpscaleStillPending(body []byte) bool {
+	payload, ok := cpaAsyncParseUpscalePayload(body)
+	if !ok || !cpaAsyncHasUpscale(payload) {
+		return false
+	}
+	jobs := cpaAsyncCollectUpscaleJobs(payload)
+	if len(jobs) == 0 {
+		return true
+	}
+	for _, job := range jobs {
+		switch cpaAsyncNormalizeStatus(job.Status) {
+		case "succeeded":
+			continue
+		case "failed":
+			return false
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func cpaAsyncUpscaleFailureMessage(body []byte) (string, bool) {
+	payload, ok := cpaAsyncParseUpscalePayload(body)
+	if !ok || !cpaAsyncHasUpscale(payload) {
+		return "", false
+	}
+	for _, job := range cpaAsyncCollectUpscaleJobs(payload) {
+		if cpaAsyncNormalizeStatus(job.Status) != "failed" {
+			continue
+		}
+		message := strings.TrimSpace(job.ErrorMessage)
+		if message == "" {
+			message = cpaAsyncUpscaleErrorText(job.Error)
+		}
+		if message == "" {
+			message = "upscale job failed"
+		}
+		return message, true
+	}
+	return "", false
+}
+
+func cpaAsyncParseUpscalePayload(body []byte) (cpaAsyncUpscalePayload, bool) {
+	var payload cpaAsyncUpscalePayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return payload, false
+	}
+	return payload, true
+}
+
+func cpaAsyncHasUpscale(payload cpaAsyncUpscalePayload) bool {
+	return payload.Upscale || payload.UpscaleJob != nil || len(payload.UpscaleJobs) > 0
+}
+
+func cpaAsyncCollectUpscaleJobs(payload cpaAsyncUpscalePayload) []cpaAsyncUpscaleJob {
+	jobs := make([]cpaAsyncUpscaleJob, 0, len(payload.UpscaleJobs)+1)
+	if payload.UpscaleJob != nil {
+		jobs = append(jobs, *payload.UpscaleJob)
+	}
+	jobs = append(jobs, payload.UpscaleJobs...)
+	return jobs
+}
+
+func cpaAsyncNormalizeStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "succeeded", "success", "completed", "complete":
+		return "succeeded"
+	case "failed", "failure", "error":
+		return "failed"
+	default:
+		return ""
+	}
+}
+
+func cpaAsyncUpscaleErrorText(raw json.RawMessage) string {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		return strings.TrimSpace(payload.Message)
+	}
+	return ""
 }
 
 func cpaAsyncJSONField(body []byte, field string) string {

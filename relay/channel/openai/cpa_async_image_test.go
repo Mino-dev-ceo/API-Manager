@@ -96,3 +96,44 @@ func TestCPAAsyncExtractImageResponseBuildsOpenAIShapeFromTaskFields(t *testing.
 		t.Fatal("usage missing")
 	}
 }
+
+func TestCPAAsyncLooksLikeUpstreamUsesChannelName(t *testing.T) {
+	if !looksLikeCPAAsyncUpstream("http://127.0.0.1:8317", "CLIProxy Codex 本地上游") {
+		t.Fatal("expected CLIProxy channel name to enable CPA async relay")
+	}
+}
+
+func TestCPAAsyncUpscaleStillPendingAfterSourceGeneration(t *testing.T) {
+	body := []byte(`{"status":"succeeded","upscale":true,"upscale_job":{"id":"job_1","status":"queued"}}`)
+	if !cpaAsyncUpscaleStillPending(body) {
+		t.Fatal("expected queued upscale job to keep polling")
+	}
+}
+
+func TestCPAAsyncUpscaleFailureMessage(t *testing.T) {
+	body := []byte(`{"status":"succeeded","upscale":true,"upscale_job":{"id":"job_1","status":"failed","error_message":"worker failed"}}`)
+	message, failed := cpaAsyncUpscaleFailureMessage(body)
+	if !failed {
+		t.Fatal("expected failed upscale job")
+	}
+	if message != "worker failed" {
+		t.Fatalf("message = %q, want worker failed", message)
+	}
+}
+
+func TestCPAAsyncExtractImageResponseBuildsFromFinalURL(t *testing.T) {
+	body := []byte(`{"status":"succeeded","created":789,"final_url":"https://example.com/final.png"}`)
+	got, err := cpaAsyncExtractImageResponse(body)
+	if err != nil {
+		t.Fatalf("cpaAsyncExtractImageResponse returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("final response is not json: %v", err)
+	}
+	data := payload["data"].([]any)
+	if data[0].(map[string]any)["url"] != "https://example.com/final.png" {
+		t.Fatalf("unexpected data: %#v", data)
+	}
+}
