@@ -49,6 +49,9 @@ func shouldUseCPAAsyncImageRelay(c *gin.Context, info *relaycommon.RelayInfo) bo
 	if info.RelayMode != relayconstant.RelayModeImagesGenerations && info.RelayMode != relayconstant.RelayModeImagesEdits {
 		return false
 	}
+	if cpaAsyncHeaderBool(c.GetHeader("X-Mino-Async-Image-Upscale")) {
+		return true
+	}
 
 	mode := strings.ToLower(strings.TrimSpace(common.GetEnvOrDefaultString("IMAGE_CPA_ASYNC_RELAY", cpaAsyncRelayModeAuto)))
 	switch mode {
@@ -61,6 +64,15 @@ func shouldUseCPAAsyncImageRelay(c *gin.Context, info *relaycommon.RelayInfo) bo
 			info.ChannelBaseUrl,
 			common.GetContextKeyString(c, constant.ContextKeyChannelName),
 		)
+	}
+}
+
+func cpaAsyncHeaderBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on", "enabled", "enable":
+		return true
+	default:
+		return false
 	}
 }
 

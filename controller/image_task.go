@@ -2,10 +2,12 @@ package controller
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -262,6 +264,24 @@ func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
 	}
 
 	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	if imageTaskRequiresCPAChannel(imageReq) {
+		if channel, ok, err := selectCPAImageTaskChannel(c, usingGroup, imageReq.Model); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": gin.H{
+					"message": fmt.Sprintf("获取 CPA 图像渠道失败: %s", err.Error()),
+					"type":    "service_unavailable",
+				},
+			})
+			return false
+		} else if ok {
+			if newAPIError := middleware.SetupContextForSelectedChannel(c, channel, imageReq.Model); newAPIError != nil {
+				writeImageTaskChannelError(c, newAPIError)
+				return false
+			}
+			return true
+		}
+	}
+
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
 		Ctx:        c,
 		ModelName:  imageReq.Model,
@@ -287,19 +307,180 @@ func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
 		return false
 	}
 	if newAPIError := middleware.SetupContextForSelectedChannel(c, channel, imageReq.Model); newAPIError != nil {
-		status := newAPIError.StatusCode
-		if status <= 0 {
-			status = http.StatusServiceUnavailable
-		}
-		c.JSON(status, gin.H{
-			"error": gin.H{
-				"message": newAPIError.MaskSensitiveError(),
-				"type":    "service_unavailable",
-			},
-		})
+		writeImageTaskChannelError(c, newAPIError)
 		return false
 	}
 	return true
+}
+
+func writeImageTaskChannelError(c *gin.Context, newAPIError error) {
+	status := http.StatusServiceUnavailable
+	message := newAPIError.Error()
+	if typed, ok := newAPIError.(interface {
+		MaskSensitiveError() string
+	}); ok {
+		message = typed.MaskSensitiveError()
+	}
+	if withStatus, ok := newAPIError.(interface{ GetStatusCode() int }); ok && withStatus.GetStatusCode() > 0 {
+		status = withStatus.GetStatusCode()
+	}
+	c.JSON(status, gin.H{
+		"error": gin.H{
+			"message": message,
+			"type":    "service_unavailable",
+		},
+	})
+}
+
+func imageTaskRequiresCPAChannel(imageReq *dto.ImageRequest) bool {
+	if imageReq == nil {
+		return false
+	}
+	for _, field := range []string{"upscale", "upscale_4k", "enable_upscale"} {
+		if raw, ok := imageReq.Extra[field]; ok && imageTaskExtraBool(raw, field == "upscale") {
+			return true
+		}
+	}
+	for _, field := range []string{"target_long_edge", "upscale_target_long_edge"} {
+		if raw, ok := imageReq.Extra[field]; ok && imageTaskExtraInt(raw) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func imageTaskExtraBool(raw json.RawMessage, objectDefault bool) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return imageTaskStringBool(text)
+	}
+	var payload struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		if payload.Enabled != nil {
+			return *payload.Enabled
+		}
+		return objectDefault
+	}
+	return false
+}
+
+func imageTaskExtraInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var value int
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return common.String2Int(text)
+	}
+	return 0
+}
+
+func selectCPAImageTaskChannel(c *gin.Context, usingGroup string, modelName string) (*model.Channel, bool, error) {
+	for _, envName := range []string{"IMAGE_CPA_CHANNEL_ID", "CPA_IMAGE_CHANNEL_ID"} {
+		channelID := common.String2Int(strings.TrimSpace(os.Getenv(envName)))
+		if channelID <= 0 {
+			continue
+		}
+		channel, err := model.GetChannelById(channelID, true)
+		if err != nil {
+			return nil, false, err
+		}
+		if channel.Status != common.ChannelStatusEnabled {
+			return nil, false, fmt.Errorf("configured CPA image channel #%d is disabled", channelID)
+		}
+		return channel, true, nil
+	}
+
+	groups := []string{usingGroup}
+	if usingGroup == "auto" {
+		groups = service.GetUserAutoGroup(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	}
+	models := ratio_setting.EquivalentMatchingModelNames(modelName)
+	if len(groups) == 0 || len(models) == 0 {
+		return nil, false, nil
+	}
+
+	var channels []*model.Channel
+	groupColumn := "abilities.`group`"
+	if !common.UsingMySQL {
+		groupColumn = `abilities."group"`
+	}
+	err := model.DB.Table("channels").
+		Select("channels.*").
+		Joins("JOIN abilities ON abilities.channel_id = channels.id").
+		Where("abilities.enabled = ? AND "+groupColumn+" IN ? AND abilities.model IN ? AND channels.status = ?", true, groups, models, common.ChannelStatusEnabled).
+		Find(&channels).Error
+	if err != nil {
+		return nil, false, err
+	}
+	var selected *model.Channel
+	for _, channel := range channels {
+		if !looksLikeCPAImageChannel(channel) {
+			continue
+		}
+		if selected == nil || channel.GetPriority() > selected.GetPriority() {
+			selected = channel
+		}
+	}
+	if selected == nil {
+		return nil, false, nil
+	}
+	return selected, true, nil
+}
+
+func imageTaskStringBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on", "enabled", "enable":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeCPAImageChannel(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.Type == constant.ChannelTypeCodex {
+		return true
+	}
+	for _, value := range []string{
+		channel.Name,
+		channel.GetBaseURL(),
+		stringValue(channel.Tag),
+		stringValue(channel.Remark),
+	} {
+		text := strings.ToLower(strings.TrimSpace(value))
+		if text == "" {
+			continue
+		}
+		for _, marker := range []string{"cli-proxy", "cliproxy", "cpa", "codex"} {
+			if strings.Contains(text, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func GetImageHistory(c *gin.Context) {

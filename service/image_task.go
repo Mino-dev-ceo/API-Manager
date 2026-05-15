@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -150,6 +151,9 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Mino-Async-Image-Task", task.TaskID)
+	if imageTaskRequestRequiresUpscale(body) {
+		req.Header.Set("X-Mino-Async-Image-Upscale", "true")
+	}
 	if task.ChannelId > 0 {
 		req.Header.Set("X-Mino-Async-Channel-Id", strconv.Itoa(task.ChannelId))
 	}
@@ -211,6 +215,61 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 	task.FinishTime = time.Now().Unix()
 	task.FailReason = ""
 	return task.Update()
+}
+
+func imageTaskRequestRequiresUpscale(body []byte) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	for _, field := range []string{"upscale", "upscale_4k", "enable_upscale"} {
+		if value, ok := raw[field]; ok && imageTaskJSONBool(value, field == "upscale") {
+			return true
+		}
+	}
+	for _, field := range []string{"target_long_edge", "upscale_target_long_edge"} {
+		if value, ok := raw[field]; ok && imageTaskJSONInt(value) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func imageTaskJSONBool(raw json.RawMessage, objectDefault bool) bool {
+	var value bool
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		switch strings.ToLower(strings.TrimSpace(text)) {
+		case "1", "t", "true", "y", "yes", "on", "enabled", "enable":
+			return true
+		}
+		return false
+	}
+	var payload struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		if payload.Enabled != nil {
+			return *payload.Enabled
+		}
+		return objectDefault
+	}
+	return false
+}
+
+func imageTaskJSONInt(raw json.RawMessage) int {
+	var value int
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return common.String2Int(text)
+	}
+	return 0
 }
 
 func existingImageTaskObject(ctx context.Context, item *dto.ImageData) (*ImageObject, error) {
