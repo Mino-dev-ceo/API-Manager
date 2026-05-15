@@ -49,7 +49,7 @@ func shouldUseCPAAsyncImageRelay(c *gin.Context, info *relaycommon.RelayInfo) bo
 	if info.RelayMode != relayconstant.RelayModeImagesGenerations && info.RelayMode != relayconstant.RelayModeImagesEdits {
 		return false
 	}
-	if cpaAsyncHeaderBool(c.GetHeader("X-Mino-Async-Image-Upscale")) {
+	if cpaAsyncImageUpscaleRequested(c) {
 		return true
 	}
 
@@ -74,6 +74,14 @@ func cpaAsyncHeaderBool(value string) bool {
 	default:
 		return false
 	}
+}
+
+func cpaAsyncImageUpscaleRequested(c *gin.Context) bool {
+	return c != nil && cpaAsyncHeaderBool(c.GetHeader("X-Mino-Async-Image-Upscale"))
+}
+
+func cpaAsyncFallbackToSyncAllowed(c *gin.Context) bool {
+	return !cpaAsyncImageUpscaleRequested(c)
 }
 
 func looksLikeCPAAsyncUpstream(values ...string) bool {
@@ -101,7 +109,7 @@ func (a *Adaptor) doCPAAsyncImageRequest(c *gin.Context, info *relaycommon.Relay
 		return nil, false, err
 	}
 	if !ok {
-		return nil, true, fmt.Errorf("request url %s is not a cpa image endpoint", syncURL)
+		return nil, cpaAsyncFallbackToSyncAllowed(c), fmt.Errorf("request url %s is not a cpa image endpoint", syncURL)
 	}
 
 	client, err := cpaAsyncHTTPClient(info)
@@ -122,7 +130,7 @@ func (a *Adaptor) doCPAAsyncImageRequest(c *gin.Context, info *relaycommon.Relay
 		return nil, false, err
 	}
 	if isCPAAsyncUnsupportedStatus(statusCode) {
-		return nil, true, fmt.Errorf("cpa async endpoint unsupported, status=%d", statusCode)
+		return nil, cpaAsyncFallbackToSyncAllowed(c), fmt.Errorf("cpa async endpoint unsupported, status=%d", statusCode)
 	}
 	if statusCode < 200 || statusCode >= 300 {
 		return nil, false, fmt.Errorf("submit cpa async image task returned HTTP %d: %s", statusCode, compactCPAAsyncBody(createBody))

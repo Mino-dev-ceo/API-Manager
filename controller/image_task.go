@@ -250,9 +250,6 @@ func GetImageTask(c *gin.Context) {
 }
 
 func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
-	if common.GetContextKeyInt(c, constant.ContextKeyChannelId) > 0 {
-		return true
-	}
 	if imageReq == nil || strings.TrimSpace(imageReq.Model) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{
@@ -264,7 +261,8 @@ func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
 	}
 
 	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-	if imageTaskRequiresCPAChannel(imageReq) {
+	requiresCPA := imageTaskRequiresCPAChannel(imageReq)
+	if requiresCPA {
 		if channel, ok, err := selectCPAImageTaskChannel(c, usingGroup, imageReq.Model); err != nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"error": gin.H{
@@ -280,6 +278,20 @@ func ensureImageTaskChannel(c *gin.Context, imageReq *dto.ImageRequest) bool {
 			}
 			return true
 		}
+		if currentImageTaskChannelLooksLikeCPA(c) {
+			return true
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": gin.H{
+				"message": "4K image requests require an enabled CPA image channel",
+				"type":    "service_unavailable",
+			},
+		})
+		return false
+	}
+
+	if common.GetContextKeyInt(c, constant.ContextKeyChannelId) > 0 {
+		return true
 	}
 
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
@@ -454,15 +466,31 @@ func looksLikeCPAImageChannel(channel *model.Channel) bool {
 	if channel == nil {
 		return false
 	}
-	if channel.Type == constant.ChannelTypeCodex {
-		return true
-	}
-	for _, value := range []string{
+	return looksLikeCPAImageValues(
+		channel.Type,
 		channel.Name,
 		channel.GetBaseURL(),
 		stringValue(channel.Tag),
 		stringValue(channel.Remark),
-	} {
+	)
+}
+
+func currentImageTaskChannelLooksLikeCPA(c *gin.Context) bool {
+	if c == nil || common.GetContextKeyInt(c, constant.ContextKeyChannelId) <= 0 {
+		return false
+	}
+	return looksLikeCPAImageValues(
+		common.GetContextKeyInt(c, constant.ContextKeyChannelType),
+		common.GetContextKeyString(c, constant.ContextKeyChannelName),
+		common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl),
+	)
+}
+
+func looksLikeCPAImageValues(channelType int, values ...string) bool {
+	if channelType == constant.ChannelTypeCodex {
+		return true
+	}
+	for _, value := range values {
 		text := strings.ToLower(strings.TrimSpace(value))
 		if text == "" {
 			continue

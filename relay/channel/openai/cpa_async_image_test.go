@@ -2,7 +2,11 @@ package openai
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestCPAAsyncImageCreateURL(t *testing.T) {
@@ -159,5 +163,17 @@ func TestCPAAsyncExtractImageResponsePrefersUpscaleJobResult(t *testing.T) {
 	data := payload["data"].([]any)
 	if data[0].(map[string]any)["url"] != "https://example.com/final-4k.png" {
 		t.Fatalf("unexpected data: %#v", data)
+	}
+}
+
+func TestCPAAsyncDisablesSyncFallbackForUpscale(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	c.Request.Header.Set("X-Mino-Async-Image-Upscale", "true")
+
+	if cpaAsyncFallbackToSyncAllowed(c) {
+		t.Fatal("upscale requests must not fall back to sync image generation")
 	}
 }

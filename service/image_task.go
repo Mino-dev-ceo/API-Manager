@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -151,7 +152,7 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-Mino-Async-Image-Task", task.TaskID)
-	if imageTaskRequestRequiresUpscale(body) {
+	if imageTaskRequestRequiresUpscale(body, task.PrivateData.RequestType) {
 		req.Header.Set("X-Mino-Async-Image-Upscale", "true")
 	}
 	if task.ChannelId > 0 {
@@ -217,7 +218,10 @@ func executeImageTask(ctx context.Context, task *model.Task) error {
 	return task.Update()
 }
 
-func imageTaskRequestRequiresUpscale(body []byte) bool {
+func imageTaskRequestRequiresUpscale(body []byte, contentType string) bool {
+	if imageTaskMultipartRequestRequiresUpscale(body, contentType) {
+		return true
+	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return false
@@ -235,6 +239,38 @@ func imageTaskRequestRequiresUpscale(body []byte) bool {
 	return false
 }
 
+func imageTaskMultipartRequestRequiresUpscale(body []byte, contentType string) bool {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") {
+		return false
+	}
+	boundary := strings.TrimSpace(params["boundary"])
+	if boundary == "" {
+		return false
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	form, err := reader.ReadForm(int64(len(body)))
+	if err != nil {
+		return false
+	}
+	defer form.RemoveAll()
+	for _, field := range []string{"upscale", "upscale_4k", "enable_upscale"} {
+		for _, value := range form.Value[field] {
+			if imageTaskStringBool(value) {
+				return true
+			}
+		}
+	}
+	for _, field := range []string{"target_long_edge", "upscale_target_long_edge"} {
+		for _, value := range form.Value[field] {
+			if common.String2Int(value) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func imageTaskJSONBool(raw json.RawMessage, objectDefault bool) bool {
 	var value bool
 	if err := json.Unmarshal(raw, &value); err == nil {
@@ -242,11 +278,7 @@ func imageTaskJSONBool(raw json.RawMessage, objectDefault bool) bool {
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		switch strings.ToLower(strings.TrimSpace(text)) {
-		case "1", "t", "true", "y", "yes", "on", "enabled", "enable":
-			return true
-		}
-		return false
+		return imageTaskStringBool(text)
 	}
 	var payload struct {
 		Enabled *bool `json:"enabled"`
@@ -258,6 +290,15 @@ func imageTaskJSONBool(raw json.RawMessage, objectDefault bool) bool {
 		return objectDefault
 	}
 	return false
+}
+
+func imageTaskStringBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on", "enabled", "enable":
+		return true
+	default:
+		return false
+	}
 }
 
 func imageTaskJSONInt(raw json.RawMessage) int {

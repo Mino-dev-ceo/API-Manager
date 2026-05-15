@@ -158,6 +158,12 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			if imageValue := formData.Get("image"); imageValue != "" {
 				imageRequest.Image, _ = json.Marshal(imageValue)
 			}
+			imageRequest.Extra = make(map[string]json.RawMessage)
+			for _, field := range []string{"upscale", "upscale_4k", "enable_upscale", "target_long_edge", "upscale_target_long_edge"} {
+				if formData.Has(field) {
+					imageRequest.Extra[field], _ = json.Marshal(formData.Get(field))
+				}
+			}
 
 			if imageRequest.Model == "gpt-image-1" {
 				if imageRequest.Quality == "" {
