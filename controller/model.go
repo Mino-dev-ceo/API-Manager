@@ -29,6 +29,18 @@ var openAIModels []dto.OpenAIModels
 var openAIModelsMap map[string]dto.OpenAIModels
 var channelId2Models map[int][]string
 
+func withModelContextWindow(aiModel dto.OpenAIModels) dto.OpenAIModels {
+	contextWindow := common.GetModelContextWindow(aiModel.Id)
+	if contextWindow > 0 {
+		aiModel.ContextWindow = contextWindow
+		aiModel.ContextLength = contextWindow
+		aiModel.MaxContextTokens = contextWindow
+		aiModel.MaxInputTokens = contextWindow
+		aiModel.InputTokenLimit = contextWindow
+	}
+	return aiModel
+}
+
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
 	for i := 0; i < constant.APITypeDummy; i++ {
@@ -39,53 +51,53 @@ func init() {
 		channelName := adaptor.GetChannelName()
 		modelNames := adaptor.GetModelList()
 		for _, modelName := range modelNames {
-			openAIModels = append(openAIModels, dto.OpenAIModels{
+			openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 				Id:      modelName,
 				Object:  "model",
 				Created: 1626777600,
 				OwnedBy: channelName,
-			})
+			}))
 		}
 	}
 	for _, modelName := range ai360.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
+		openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
 			OwnedBy: ai360.ChannelName,
-		})
+		}))
 	}
 	for _, modelName := range moonshot.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
+		openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
 			OwnedBy: moonshot.ChannelName,
-		})
+		}))
 	}
 	for _, modelName := range lingyiwanwu.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
+		openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
 			OwnedBy: lingyiwanwu.ChannelName,
-		})
+		}))
 	}
 	for _, modelName := range minimax.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
+		openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
 			OwnedBy: minimax.ChannelName,
-		})
+		}))
 	}
 	for modelName, _ := range constant.MidjourneyModel2Action {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
+		openAIModels = append(openAIModels, withModelContextWindow(dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
 			OwnedBy: "midjourney",
-		})
+		}))
 	}
 	openAIModelsMap = make(map[string]dto.OpenAIModels)
 	for _, aiModel := range openAIModels {
@@ -141,15 +153,16 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 			if oaiModel, ok := openAIModelsMap[allowModel]; ok {
 				oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(allowModel)
+				oaiModel = withModelContextWindow(oaiModel)
 				userOpenAiModels = append(userOpenAiModels, oaiModel)
 			} else {
-				userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
+				userOpenAiModels = append(userOpenAiModels, withModelContextWindow(dto.OpenAIModels{
 					Id:                     allowModel,
 					Object:                 "model",
 					Created:                1626777600,
 					OwnedBy:                "custom",
 					SupportedEndpointTypes: model.GetModelSupportEndpointTypes(allowModel),
-				})
+				}))
 			}
 		}
 	} else {
@@ -189,15 +202,16 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 			if oaiModel, ok := openAIModelsMap[modelName]; ok {
 				oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(modelName)
+				oaiModel = withModelContextWindow(oaiModel)
 				userOpenAiModels = append(userOpenAiModels, oaiModel)
 			} else {
-				userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
+				userOpenAiModels = append(userOpenAiModels, withModelContextWindow(dto.OpenAIModels{
 					Id:                     modelName,
 					Object:                 "model",
 					Created:                1626777600,
 					OwnedBy:                "custom",
 					SupportedEndpointTypes: model.GetModelSupportEndpointTypes(modelName),
-				})
+				}))
 			}
 		}
 	}
@@ -222,9 +236,11 @@ func ListModels(c *gin.Context, modelType int) {
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))
 		for i, model := range userOpenAiModels {
+			contextWindow := common.GetModelContextWindow(model.Id)
 			userGeminiModels[i] = dto.GeminiModel{
-				Name:        model.Id,
-				DisplayName: model.Id,
+				Name:            model.Id,
+				DisplayName:     model.Id,
+				InputTokenLimit: contextWindow,
 			}
 		}
 		c.JSON(200, gin.H{
