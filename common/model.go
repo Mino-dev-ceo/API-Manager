@@ -57,3 +57,14 @@ func IsOpenAITextModel(modelName string) bool {
 	}
 	return false
 }
+
+func GetModelContextWindow(modelName string) int {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	if modelName == "" {
+		return 0
+	}
+	if strings.HasPrefix(modelName, "gpt-5") || strings.HasPrefix(modelName, "codex-") {
+		return 1000000
+	}
+	return 0
+}

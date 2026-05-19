@@ -20,6 +20,11 @@ type Pricing struct {
 	Icon                   string                  `json:"icon,omitempty"`
 	Tags                   string                  `json:"tags,omitempty"`
 	VendorID               int                     `json:"vendor_id,omitempty"`
+	ContextWindow          int                     `json:"context_window,omitempty"`
+	ContextLength          int                     `json:"context_length,omitempty"`
+	MaxContextTokens       int                     `json:"max_context_tokens,omitempty"`
+	MaxInputTokens         int                     `json:"max_input_tokens,omitempty"`
+	InputTokenLimit        int                     `json:"input_token_limit,omitempty"`
 	QuotaType              int                     `json:"quota_type"`
 	ModelRatio             float64                 `json:"model_ratio"`
 	ModelPrice             float64                 `json:"model_price"`
@@ -280,6 +285,13 @@ func updatePricing() {
 			EnableGroup:            groups.Items(),
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
 		}
+		if contextWindow := common.GetModelContextWindow(model); contextWindow > 0 {
+			pricing.ContextWindow = contextWindow
+			pricing.ContextLength = contextWindow
+			pricing.MaxContextTokens = contextWindow
+			pricing.MaxInputTokens = contextWindow
+			pricing.InputTokenLimit = contextWindow
+		}
 
 		// 补充模型元数据（描述、标签、供应商、状态）
 		if meta, ok := metaMap[model]; ok {
@@ -324,7 +336,7 @@ func updatePricing() {
 
 	// 防止大更新后数据不通用
 	if len(pricingMap) > 0 {
-		pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
+		pricingMap[0].PricingVersion = "c41bb4c96f95a6d08e4be704d968f12d"
 	}
 
 	// 刷新缓存映射，供高并发快速查询
