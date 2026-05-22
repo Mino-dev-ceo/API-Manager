@@ -36,3 +36,32 @@ func TestBuildContentGenerationTaskURL(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAPICompatibleVideoURL(t *testing.T) {
+	if !isNewAPICompatibleVideoBaseURL("https://bobotoken.top/_cnapi") {
+		t.Fatal("expected bobotoken upstream to use New API compatible video endpoint")
+	}
+	if isNewAPICompatibleVideoBaseURL("https://ark.cn-beijing.volces.com") {
+		t.Fatal("expected official Ark endpoint to use content generation endpoint")
+	}
+
+	got := buildNewAPIVideoTaskURL("https://bobotoken.top/_cnapi/", "task_123")
+	want := "https://bobotoken.top/_cnapi/v1/video/generations/task_123"
+	if got != want {
+		t.Fatalf("buildNewAPIVideoTaskURL() = %q, want %q", got, want)
+	}
+}
+
+func TestParseCompatibleTaskResult(t *testing.T) {
+	body := []byte(`{"code":"success","data":{"status":"SUCCESS","progress":"100%","result_url":"https://example.com/video.mp4"}}`)
+	result, ok := parseCompatibleTaskResult(body)
+	if !ok {
+		t.Fatal("expected compatible task result")
+	}
+	if result.Status != "SUCCESS" {
+		t.Fatalf("status = %q, want SUCCESS", result.Status)
+	}
+	if result.Url != "https://example.com/video.mp4" {
+		t.Fatalf("url = %q", result.Url)
+	}
+}
