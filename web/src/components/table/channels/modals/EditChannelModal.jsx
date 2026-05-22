@@ -1239,7 +1239,9 @@ const EditChannelModal = (props) => {
     if (inputs.type !== 45) {
       doubaoApiClickCountRef.current = 0;
       setDoubaoApiEditUnlocked(false);
+      return;
     }
+    setDoubaoApiEditUnlocked(true);
   }, [inputs.type]);
 
   useEffect(() => {

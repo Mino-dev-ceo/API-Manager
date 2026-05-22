@@ -191,6 +191,8 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	} else {
 		info.UpstreamModelName = body.Model
 	}
+	body.Model = ResolveModelName(body.Model)
+	info.UpstreamModelName = body.Model
 	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -292,6 +294,17 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 
 	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
 		r.Duration = lo.ToPtr(dto.IntValue(sec))
+	} else if req.Duration > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
+	}
+
+	if req.Ratio != "" {
+		r.Ratio = req.Ratio
+	} else if req.AspectRatio != "" {
+		r.Ratio = req.AspectRatio
+	}
+	if req.Resolution != "" {
+		r.Resolution = req.Resolution
 	}
 
 	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
@@ -352,7 +365,11 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
-	openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	videoURL := dResp.Content.VideoURL
+	if videoURL == "" {
+		videoURL = originTask.GetResultURL()
+	}
+	openAIVideo.SetMetadata("url", videoURL)
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName

@@ -587,6 +587,11 @@ func RelayTask(c *gin.Context) {
 		task.Quota = result.Quota
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
+		if reqValue, ok := c.Get("task_request"); ok {
+			if taskReq, ok := reqValue.(relaycommon.TaskSubmitReq); ok {
+				task.Properties.Input = taskReq.Prompt
+			}
+		}
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
 		}
