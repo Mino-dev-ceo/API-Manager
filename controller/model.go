@@ -105,6 +105,13 @@ func init() {
 	}
 	channelId2Models = make(map[int][]string)
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
+		if i == constant.ChannelTypeDoubaoVideo {
+			taskAdaptor := relay.GetTaskAdaptor(constant.TaskPlatform(fmt.Sprintf("%d", i)))
+			if taskAdaptor != nil {
+				channelId2Models[i] = taskAdaptor.GetModelList()
+			}
+			continue
+		}
 		apiType, success := common.ChannelType2APIType(i)
 		if !success || apiType == constant.APITypeAIProxyLibrary {
 			continue
