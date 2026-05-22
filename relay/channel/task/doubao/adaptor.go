@@ -2,9 +2,11 @@ package doubao
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +99,25 @@ type responseTask struct {
 	UpdatedAt int64 `json:"updated_at"`
 }
 
+type compatibleTaskResponse struct {
+	ID     string `json:"id"`
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+	Error  *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Data struct {
+		ID         string          `json:"id"`
+		TaskID     string          `json:"task_id"`
+		Status     string          `json:"status"`
+		Progress   string          `json:"progress"`
+		ResultURL  string          `json:"result_url"`
+		FailReason string          `json:"fail_reason"`
+		Data       json.RawMessage `json:"data"`
+	} `json:"data"`
+}
+
 // ============================
 // Adaptor implementation
 // ============================
@@ -122,6 +143,9 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
+	if isNewAPICompatibleVideoBaseURL(a.baseURL) {
+		return buildNewAPIVideoTaskURL(a.baseURL, ""), nil
+	}
 	return buildContentGenerationTaskURL(a.baseURL, ""), nil
 }
 
@@ -183,6 +207,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
+	if isNewAPICompatibleVideoBaseURL(a.baseURL) {
+		if info.UpstreamModelName != "" {
+			req.Model = info.UpstreamModelName
+		}
+		data, err := common.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(data), nil
+	}
+
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
@@ -222,7 +257,19 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	if dResp.ID == "" {
+	upstreamID := dResp.ID
+	if upstreamID == "" {
+		var compatibleResp compatibleTaskResponse
+		if err := common.Unmarshal(responseBody, &compatibleResp); err == nil {
+			upstreamID = firstNonEmptyString(
+				compatibleResp.ID,
+				compatibleResp.TaskID,
+				compatibleResp.Data.ID,
+				compatibleResp.Data.TaskID,
+			)
+		}
+	}
+	if upstreamID == "" {
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("task_id is empty"), "invalid_response", http.StatusInternalServerError)
 		return
 	}
@@ -234,7 +281,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.Model = info.OriginModelName
 
 	c.JSON(http.StatusOK, ov)
-	return dResp.ID, responseBody, nil
+	return upstreamID, responseBody, nil
 }
 
 // FetchTask fetch task status
@@ -245,6 +292,9 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	}
 
 	uri := buildContentGenerationTaskURL(baseUrl, taskID)
+	if isNewAPICompatibleVideoBaseURL(baseUrl) {
+		uri = buildNewAPIVideoTaskURL(baseUrl, taskID)
+	}
 
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
@@ -262,6 +312,30 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	return client.Do(req)
 }
 
+func isNewAPICompatibleVideoBaseURL(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	if strings.Contains(host, "volces.com") {
+		return false
+	}
+	return true
+}
+
+func buildNewAPIVideoTaskURL(baseURL string, taskID string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	trimmed += "/v1/video/generations"
+	if taskID != "" {
+		return trimmed + "/" + taskID
+	}
+	return trimmed
+}
+
 func buildContentGenerationTaskURL(baseURL string, taskID string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	switch {
@@ -276,6 +350,15 @@ func buildContentGenerationTaskURL(baseURL string, taskID string) string {
 		return trimmed + "/" + taskID
 	}
 	return trimmed
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
@@ -334,6 +417,10 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
+	if taskResult, ok := parseCompatibleTaskResult(respBody); ok {
+		return taskResult, nil
+	}
+
 	resTask := responseTask{}
 	if err := common.Unmarshal(respBody, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
@@ -369,6 +456,54 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	}
 
 	return &taskResult, nil
+}
+
+func parseCompatibleTaskResult(respBody []byte) (*relaycommon.TaskInfo, bool) {
+	var res compatibleTaskResponse
+	if err := common.Unmarshal(respBody, &res); err != nil {
+		return nil, false
+	}
+	status := firstNonEmptyString(res.Data.Status, res.Status)
+	if status == "" && len(res.Data.Data) == 0 && res.Data.ResultURL == "" {
+		return nil, false
+	}
+
+	taskResult := relaycommon.TaskInfo{Code: 0}
+	switch strings.ToUpper(status) {
+	case "NOT_START", "SUBMITTED", "QUEUED":
+		taskResult.Status = model.TaskStatusQueued
+		taskResult.Progress = "10%"
+	case "IN_PROGRESS", "PROCESSING", "RUNNING":
+		taskResult.Status = model.TaskStatusInProgress
+		taskResult.Progress = firstNonEmptyString(res.Data.Progress, "50%")
+	case "SUCCESS", "SUCCEEDED", "COMPLETED":
+		taskResult.Status = model.TaskStatusSuccess
+		taskResult.Progress = "100%"
+		taskResult.Url = res.Data.ResultURL
+	case "FAILURE", "FAILED", "CANCELLED":
+		taskResult.Status = model.TaskStatusFailure
+		taskResult.Progress = "100%"
+		taskResult.Reason = firstNonEmptyString(res.Data.FailReason)
+		if res.Error != nil {
+			taskResult.Reason = firstNonEmptyString(taskResult.Reason, res.Error.Message)
+		}
+	default:
+		taskResult.Status = model.TaskStatusInProgress
+		taskResult.Progress = firstNonEmptyString(res.Data.Progress, "30%")
+	}
+
+	if taskResult.Url == "" && len(res.Data.Data) > 0 {
+		var nested responseTask
+		if err := common.Unmarshal(res.Data.Data, &nested); err == nil {
+			taskResult.Url = nested.Content.VideoURL
+			if taskResult.TotalTokens == 0 {
+				taskResult.CompletionTokens = nested.Usage.CompletionTokens
+				taskResult.TotalTokens = nested.Usage.TotalTokens
+			}
+		}
+	}
+
+	return &taskResult, true
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {
