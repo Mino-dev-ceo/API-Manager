@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -121,7 +122,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
-	return fmt.Sprintf("%s/api/v3/contents/generations/tasks", a.baseURL), nil
+	return buildContentGenerationTaskURL(a.baseURL, ""), nil
 }
 
 // BuildRequestHeader sets required headers.
@@ -243,7 +244,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("invalid task_id")
 	}
 
-	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
+	uri := buildContentGenerationTaskURL(baseUrl, taskID)
 
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
 	if err != nil {
@@ -259,6 +260,22 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
 	return client.Do(req)
+}
+
+func buildContentGenerationTaskURL(baseURL string, taskID string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	switch {
+	case strings.HasSuffix(trimmed, "/api/v3/contents/generations/tasks"):
+		// Some admins paste the SDK base plus resource path directly.
+	case strings.HasSuffix(trimmed, "/api/v3"):
+		trimmed += "/contents/generations/tasks"
+	default:
+		trimmed += "/api/v3/contents/generations/tasks"
+	}
+	if taskID != "" {
+		return trimmed + "/" + taskID
+	}
+	return trimmed
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
