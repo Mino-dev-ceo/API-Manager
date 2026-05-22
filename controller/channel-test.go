@@ -56,6 +56,11 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
+func isSeedanceVideoModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(name, "seedance")
+}
+
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
@@ -88,6 +93,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			if testModel == "" {
 				testModel = "gpt-4o-mini"
 			}
+		}
+	}
+	if channel.Type == constant.ChannelTypeVolcEngine && isSeedanceVideoModel(testModel) {
+		return testResult{
+			localErr: fmt.Errorf("Seedance video model channel test is not supported; please use the video generation page to verify this channel"),
 		}
 	}
 
