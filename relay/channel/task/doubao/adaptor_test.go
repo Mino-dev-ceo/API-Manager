@@ -65,3 +65,11 @@ func TestParseCompatibleTaskResult(t *testing.T) {
 		t.Fatalf("url = %q", result.Url)
 	}
 }
+
+func TestResolveCompatibleUpstreamModelName(t *testing.T) {
+	got := resolveCompatibleUpstreamModelName("seedance-2.0", "")
+	want := "doubao-seedance-2-0-260128"
+	if got != want {
+		t.Fatalf("resolveCompatibleUpstreamModelName() = %q, want %q", got, want)
+	}
+}

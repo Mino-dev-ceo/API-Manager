@@ -208,9 +208,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 
 	if isNewAPICompatibleVideoBaseURL(a.baseURL) {
-		if info.UpstreamModelName != "" {
-			req.Model = info.UpstreamModelName
-		}
+		req.Model = resolveCompatibleUpstreamModelName(info.UpstreamModelName, req.Model)
 		data, err := common.Marshal(req)
 		if err != nil {
 			return nil, err
@@ -334,6 +332,11 @@ func buildNewAPIVideoTaskURL(baseURL string, taskID string) string {
 		return trimmed + "/" + taskID
 	}
 	return trimmed
+}
+
+func resolveCompatibleUpstreamModelName(mappedModelName string, requestModelName string) string {
+	modelName := firstNonEmptyString(mappedModelName, requestModelName)
+	return ResolveModelName(modelName)
 }
 
 func buildContentGenerationTaskURL(baseURL string, taskID string) string {
