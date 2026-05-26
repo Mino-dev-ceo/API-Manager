@@ -2,9 +2,12 @@ package doubao
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -125,6 +128,12 @@ type compatibleTaskResponse struct {
 	} `json:"data"`
 }
 
+type compatibleReference struct {
+	Type string `json:"type"`
+	Role string `json:"role"`
+	URL  string `json:"url"`
+}
+
 // ============================
 // Adaptor implementation
 // ============================
@@ -217,7 +226,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if isNewAPICompatibleVideoBaseURL(a.baseURL) {
 		req.Model = resolveCompatibleUpstreamModelName(info.UpstreamModelName, req.Model)
 		normalizeCompatibleVideoRequest(&req)
-		data, err := common.Marshal(req)
+		body, err := a.convertToCompatibleRequestPayload(&req)
+		if err != nil {
+			return nil, err
+		}
+		data, err := common.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
@@ -452,6 +465,128 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	})
 
 	return &r, nil
+}
+
+func (a *TaskAdaptor) convertToCompatibleRequestPayload(req *relaycommon.TaskSubmitReq) (map[string]any, error) {
+	data, err := common.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	var body map[string]any
+	if err := common.Unmarshal(data, &body); err != nil {
+		return nil, err
+	}
+	delete(body, "image")
+	delete(body, "images")
+	delete(body, "ratio")
+	delete(body, "aspect_ratio")
+
+	references, err := a.compatibleReferences(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(references) > 0 {
+		body["references"] = references
+	}
+	return body, nil
+}
+
+func (a *TaskAdaptor) compatibleReferences(req *relaycommon.TaskSubmitReq) ([]compatibleReference, error) {
+	images := append([]string{}, req.Images...)
+	if req.Image != "" && !lo.Contains(images, req.Image) {
+		images = append(images, req.Image)
+	}
+	references := make([]compatibleReference, 0, len(images))
+	for _, imageURL := range images {
+		imageURL = strings.TrimSpace(imageURL)
+		if imageURL == "" {
+			continue
+		}
+		if strings.HasPrefix(imageURL, "data:") {
+			uploadedURL, err := a.uploadCompatibleAsset(imageURL)
+			if err != nil {
+				return nil, err
+			}
+			imageURL = uploadedURL
+		}
+		references = append(references, compatibleReference{
+			Type: "image",
+			Role: "reference_image",
+			URL:  imageURL,
+		})
+	}
+	return references, nil
+}
+
+func (a *TaskAdaptor) uploadCompatibleAsset(dataURL string) (string, error) {
+	mimeType, payload, ok := strings.Cut(strings.TrimSpace(dataURL), ",")
+	if !ok || !strings.HasPrefix(mimeType, "data:") {
+		return "", fmt.Errorf("invalid data url")
+	}
+	contentType := strings.TrimPrefix(mimeType, "data:")
+	contentType = strings.TrimSuffix(contentType, ";base64")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	fileBytes, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", fmt.Errorf("decode compatible asset failed: %w", err)
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	exts, _ := mime.ExtensionsByType(contentType)
+	ext := ".bin"
+	if len(exts) > 0 {
+		ext = exts[0]
+	}
+	part, err := writer.CreateFormFile("file", "reference"+ext)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(fileBytes); err != nil {
+		return "", err
+	}
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+
+	uploadURL := strings.TrimRight(strings.TrimSpace(a.baseURL), "/") + "/v1/video-assets/upload"
+	req, err := http.NewRequest(http.MethodPost, uploadURL, &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client, err := service.GetHttpClientWithProxy("")
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("upload compatible asset failed: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+	var result struct {
+		URL      string `json:"url"`
+		FilePath string `json:"file_path"`
+	}
+	if err := common.Unmarshal(respBody, &result); err != nil {
+		return "", err
+	}
+	assetURL := firstNonEmptyString(result.URL, result.FilePath)
+	if assetURL == "" {
+		return "", fmt.Errorf("upload compatible asset returned empty url")
+	}
+	return assetURL, nil
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
