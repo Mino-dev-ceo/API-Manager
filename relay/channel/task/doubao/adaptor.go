@@ -100,14 +100,21 @@ type responseTask struct {
 }
 
 type compatibleTaskResponse struct {
-	ID     string `json:"id"`
-	TaskID string `json:"task_id"`
-	Status string `json:"status"`
-	Error  *struct {
+	ID       string `json:"id"`
+	TaskID   string `json:"task_id"`
+	Status   string `json:"status"`
+	Progress any    `json:"progress"`
+	Error    *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
-	Data struct {
+	Metadata struct {
+		URL          string `json:"url"`
+		LastFrameURL string `json:"last_frame_url"`
+	} `json:"metadata"`
+	ContentURL  string `json:"content_url"`
+	DownloadURL string `json:"download_url"`
+	Data        struct {
 		ID         string          `json:"id"`
 		TaskID     string          `json:"task_id"`
 		Status     string          `json:"status"`
@@ -209,6 +216,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 
 	if isNewAPICompatibleVideoBaseURL(a.baseURL) {
 		req.Model = resolveCompatibleUpstreamModelName(info.UpstreamModelName, req.Model)
+		normalizeCompatibleVideoRequest(&req)
 		data, err := common.Marshal(req)
 		if err != nil {
 			return nil, err
@@ -327,7 +335,7 @@ func isNewAPICompatibleVideoBaseURL(baseURL string) bool {
 
 func buildNewAPIVideoTaskURL(baseURL string, taskID string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	trimmed += "/v1/video/generations"
+	trimmed += "/v1/videos"
 	if taskID != "" {
 		return trimmed + "/" + taskID
 	}
@@ -336,7 +344,34 @@ func buildNewAPIVideoTaskURL(baseURL string, taskID string) string {
 
 func resolveCompatibleUpstreamModelName(mappedModelName string, requestModelName string) string {
 	modelName := firstNonEmptyString(mappedModelName, requestModelName)
-	return ResolveModelName(modelName)
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "seedance-2.0", "seedance 2.0", "doubao-seedance-2-0-260128":
+		return "Seedance 2.0"
+	case "seedance-2.0-fast", "seedance 2.0 fast", "doubao-seedance-2-0-fast-260128":
+		return "Seedance 2.0 Fast"
+	default:
+		return modelName
+	}
+}
+
+func normalizeCompatibleVideoRequest(req *relaycommon.TaskSubmitReq) {
+	if req == nil {
+		return
+	}
+	if req.Size == "" {
+		req.Size = firstNonEmptyString(req.Ratio, req.AspectRatio)
+	}
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]interface{})
+	}
+	if req.Resolution != "" {
+		req.Metadata["resolution"] = req.Resolution
+	} else if _, ok := req.Metadata["resolution"]; !ok {
+		req.Metadata["resolution"] = "720p"
+	}
+	if req.Size != "" {
+		req.Metadata["aspectRatio"] = req.Size
+	}
 }
 
 func buildContentGenerationTaskURL(baseURL string, taskID string) string {
@@ -467,7 +502,8 @@ func parseCompatibleTaskResult(respBody []byte) (*relaycommon.TaskInfo, bool) {
 		return nil, false
 	}
 	status := firstNonEmptyString(res.Data.Status, res.Status)
-	if status == "" && len(res.Data.Data) == 0 && res.Data.ResultURL == "" {
+	resultURL := firstNonEmptyString(res.Metadata.URL, res.ContentURL, res.Data.ResultURL)
+	if status == "" && len(res.Data.Data) == 0 && resultURL == "" {
 		return nil, false
 	}
 
@@ -475,14 +511,15 @@ func parseCompatibleTaskResult(respBody []byte) (*relaycommon.TaskInfo, bool) {
 	switch strings.ToUpper(status) {
 	case "NOT_START", "SUBMITTED", "QUEUED":
 		taskResult.Status = model.TaskStatusQueued
-		taskResult.Progress = "10%"
+		taskResult.Progress = firstNonEmptyString(compatibleProgressString(res.Progress), res.Data.Progress, "10%")
 	case "IN_PROGRESS", "PROCESSING", "RUNNING":
 		taskResult.Status = model.TaskStatusInProgress
-		taskResult.Progress = firstNonEmptyString(res.Data.Progress, "50%")
+		taskResult.Progress = firstNonEmptyString(compatibleProgressString(res.Progress), res.Data.Progress, "50%")
 	case "SUCCESS", "SUCCEEDED", "COMPLETED":
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
-		taskResult.Url = res.Data.ResultURL
+		// BoboToken media_token links are short lived. Leave Url empty so the
+		// task is stored with our stable proxy URL; the proxy refreshes upstream.
 	case "FAILURE", "FAILED", "CANCELLED":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
@@ -507,6 +544,25 @@ func parseCompatibleTaskResult(respBody []byte) (*relaycommon.TaskInfo, bool) {
 	}
 
 	return &taskResult, true
+}
+
+func compatibleProgressString(progress any) string {
+	switch v := progress.(type) {
+	case float64:
+		return fmt.Sprintf("%d%%", int(v))
+	case int:
+		return fmt.Sprintf("%d%%", v)
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return ""
+		}
+		if strings.Contains(v, "%") {
+			return v
+		}
+		return v + "%"
+	default:
+		return ""
+	}
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {
