@@ -46,14 +46,14 @@ func TestNewAPICompatibleVideoURL(t *testing.T) {
 	}
 
 	got := buildNewAPIVideoTaskURL("https://bobotoken.top/_cnapi/", "task_123")
-	want := "https://bobotoken.top/_cnapi/v1/video/generations/task_123"
+	want := "https://bobotoken.top/_cnapi/v1/videos/task_123"
 	if got != want {
 		t.Fatalf("buildNewAPIVideoTaskURL() = %q, want %q", got, want)
 	}
 }
 
 func TestParseCompatibleTaskResult(t *testing.T) {
-	body := []byte(`{"code":"success","data":{"status":"SUCCESS","progress":"100%","result_url":"https://example.com/video.mp4"}}`)
+	body := []byte(`{"id":"task_123","status":"completed","progress":100,"metadata":{"url":"https://example.com/video.mp4"}}`)
 	result, ok := parseCompatibleTaskResult(body)
 	if !ok {
 		t.Fatal("expected compatible task result")
@@ -61,14 +61,14 @@ func TestParseCompatibleTaskResult(t *testing.T) {
 	if result.Status != "SUCCESS" {
 		t.Fatalf("status = %q, want SUCCESS", result.Status)
 	}
-	if result.Url != "https://example.com/video.mp4" {
-		t.Fatalf("url = %q", result.Url)
+	if result.Url != "" {
+		t.Fatalf("url = %q, want empty stable proxy URL", result.Url)
 	}
 }
 
 func TestResolveCompatibleUpstreamModelName(t *testing.T) {
 	got := resolveCompatibleUpstreamModelName("seedance-2.0", "")
-	want := "doubao-seedance-2-0-260128"
+	want := "Seedance 2.0"
 	if got != want {
 		t.Fatalf("resolveCompatibleUpstreamModelName() = %q, want %q", got, want)
 	}

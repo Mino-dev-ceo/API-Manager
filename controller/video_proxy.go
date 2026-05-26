@@ -109,6 +109,24 @@ func VideoProxy(c *gin.Context) {
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 		req.Header.Set("Authorization", "Bearer "+channel.Key)
+	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
+		if isCompatibleVideoProxyBaseURL(baseURL) {
+			apiKey := task.PrivateData.Key
+			if apiKey == "" {
+				apiKey = channel.Key
+			}
+			videoURL, err = getCompatibleVideoURL(ctx, client, baseURL, task.GetUpstreamTaskID(), apiKey)
+			if err != nil {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to resolve compatible video URL for task %s: %s", taskID, err.Error()))
+				videoProxyError(c, http.StatusBadGateway, "server_error", "Failed to resolve video URL")
+				return
+			}
+			if apiKey != "" {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+			}
+		} else {
+			videoURL = task.GetResultURL()
+		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
@@ -169,6 +187,56 @@ func VideoProxy(c *gin.Context) {
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
 	}
+}
+
+func isCompatibleVideoProxyBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host != "" && !strings.Contains(host, "volces.com")
+}
+
+func getCompatibleVideoURL(ctx context.Context, client *http.Client, baseURL string, taskID string, apiKey string) (string, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return "", fmt.Errorf("upstream task id is empty")
+	}
+	taskURL := fmt.Sprintf("%s/v1/videos/%s", strings.TrimRight(strings.TrimSpace(baseURL), "/"), url.PathEscape(taskID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, taskURL, nil)
+	if err != nil {
+		return "", err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("upstream status %d: %s", resp.StatusCode, string(body))
+	}
+	var payload map[string]any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return "", err
+	}
+	if metadata, ok := payload["metadata"].(map[string]any); ok {
+		if value, ok := metadata["url"].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), nil
+		}
+	}
+	for _, key := range []string{"content_url", "url", "video_url", "download_url"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), nil
+		}
+	}
+	return "", fmt.Errorf("upstream task returned no video URL")
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {
