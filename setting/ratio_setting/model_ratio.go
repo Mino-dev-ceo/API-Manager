@@ -736,6 +736,12 @@ func EquivalentMatchingModelNames(name string) []string {
 		return []string{}
 	}
 	names := []string{formatted}
+	if strings.HasSuffix(formatted, CompactModelSuffix) {
+		baseModel := strings.TrimSuffix(formatted, CompactModelSuffix)
+		if baseModel != "" {
+			names = append(names, baseModel)
+		}
+	}
 	if strings.HasPrefix(formatted, "claude-") {
 		parts := strings.Split(formatted, "-")
 		if len(parts) >= 2 {
